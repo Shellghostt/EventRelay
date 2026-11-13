@@ -2,6 +2,8 @@ module github.com/shellghostt/eventrelay
 
 go 1.26.0
 
+toolchain go1.26.11
+
 require (
 	github.com/go-chi/chi/v5 v5.5.0
 	github.com/google/uuid v1.6.0

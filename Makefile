@@ -6,7 +6,7 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 
 bootstrap:
 	go mod download
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 
 build:
 	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/eventrelay
