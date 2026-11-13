@@ -2,8 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'feat/**', 'fix/**']
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -48,7 +49,7 @@ jobs:
         run: go build ./...
 
   integration:
-    name: Integration tests (PostgreSQL)
+    name: Integration tests (PostgreSQL and Redis)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -64,7 +65,17 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      redis:
+        image: redis:7.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
+      EVENTRELAY_TEST_REDIS_URL: redis://localhost:6379/0
       EVENTRELAY_TEST_DATABASE_URL: postgres://eventrelay:eventrelay@localhost:55432/eventrelay?sslmode=disable
     steps:
       - uses: actions/checkout@v6
@@ -72,8 +83,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Store integration tests
-        run: go test -race -count=1 ./internal/store
+      - name: Store and delivery integration tests
+        run: go test -race -count=1 -timeout 120s ./internal/store ./tests/integration
 
   lint:
     name: Lint

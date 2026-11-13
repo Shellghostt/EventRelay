@@ -81,6 +81,11 @@ func (s *Store) Migrate(ctx context.Context, fsys fs.FS) error {
 		return fmt.Errorf("connect for migrations: %w", err)
 	}
 	defer func() { _ = conn.Close(ctx) }()
+	// API and independently scaled workers may start together.
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(718424001)`); err != nil {
+		return fmt.Errorf("lock migrations: %w", err)
+	}
+	defer func() { _, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock(718424001)`) }()
 
 	const createTable = `
 		CREATE TABLE IF NOT EXISTS schema_migrations (

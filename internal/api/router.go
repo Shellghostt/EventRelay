@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"log/slog"
 	"net/http"
@@ -19,15 +20,18 @@ import (
 
 // Deps is everything the router needs.
 type Deps struct {
-	Store  *store.Store
-	Config config.Config
-	Log    *slog.Logger
+	Store     *store.Store
+	Config    config.Config
+	Log       *slog.Logger
+	Publisher ingest.Publisher
+	RedisPing func(context.Context) error
 }
 
 type server struct {
-	store *store.Store
-	cfg   config.Config
-	log   *slog.Logger
+	store     *store.Store
+	cfg       config.Config
+	log       *slog.Logger
+	redisPing func(context.Context) error
 }
 
 // NewRouter builds the complete handler tree.
@@ -37,13 +41,11 @@ type server struct {
 //   - /v1/endpoints (management): bearer token.
 //   - /v1/endpoints/{id}/events (ingest): HMAC signature, no bearer token.
 func NewRouter(d Deps) http.Handler {
-	s := &server{store: d.Store, cfg: d.Config, log: d.Log}
+	s := &server{store: d.Store, cfg: d.Config, log: d.Log, redisPing: d.RedisPing}
 
 	r := chi.NewRouter()
-	// The peer address is logged as it arrives. Forwarded headers such as
-	// X-Forwarded-For are chosen by the client, so they are never used to
-	// attribute a request to an IP address; trusting them would let a caller
-	// forge its own address in the logs.
+	// Keep the socket peer intact. Only explicitly trusted proxies may provide
+	// X-Forwarded-For attribution in the separate client_ip log field.
 	r.Use(middleware.RequestID)
 	r.Use(s.observe)
 	r.Use(middleware.Recoverer)
@@ -62,14 +64,9 @@ func NewRouter(d Deps) http.Handler {
 		MaxPayloadBytes: d.Config.MaxPayloadBytes,
 		Tolerance:       d.Config.SignatureTolerance,
 		Now:             time.Now,
+		Publisher:       d.Publisher,
 	}
 	r.Method(http.MethodPost, "/v1/endpoints/{id}/events", ingestHandler)
-
-	management := chi.NewRouter()
-	management.Use(requireAdminToken(d.Config.AdminToken))
-	management.Post("/v1/endpoints", s.createEndpoint)
-	management.Get("/v1/endpoints", s.listEndpoints)
-	management.Get("/v1/events", s.listEvents)
 
 	r.Group(func(r chi.Router) {
 		r.Use(requireAdminToken(d.Config.AdminToken))
@@ -90,6 +87,11 @@ func (s *server) ready(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte("not ready\n"))
+		return
+	}
+	if s.redisPing != nil && s.redisPing(ctx) != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("redis unavailable; events remain durable\n"))
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -148,6 +150,7 @@ func (s *server) observe(next http.Handler) http.Handler {
 			"duration_ms", elapsed.Milliseconds(),
 			"request_id", middleware.GetReqID(r.Context()),
 			"remote_addr", r.RemoteAddr,
+			"client_ip", clientIP(r, s.cfg.TrustedProxies),
 		)
 	})
 }

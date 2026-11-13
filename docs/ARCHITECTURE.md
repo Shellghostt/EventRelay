@@ -1,8 +1,7 @@
 # EventRelay Architecture
 
-**Status: partially implemented (M1).** The ingestion path described here exists; delivery, the Redis
-transport and the dashboard do not. This document describes intended structure, not delivered behaviour. The
-authoritative specification is [PLAN.md](PLAN.md), and section 0 there is the current truth.
+**Status: partially implemented (M2).** Ingestion, Redis transport and HTTP delivery exist.
+Full retry policy, replay, tenancy and the dashboard remain planned. See [ADR 0004](adr/0004-m2-delivery.md).
 
 ## Context
 
@@ -36,6 +35,24 @@ flowchart LR
 
 See [PLAN.md](PLAN.md) section 6 for the responsibility of each box, the request and event flows, and the
 failure behaviour of each stage.
+
+The implemented M2 path is API → PostgreSQL commit → bounded Redis stream → worker → signed HTTP.
+A lease and its attempt row are committed before HTTP begins. PostgreSQL fences completion with the
+random token, attempt number and lease expiry checked after acquiring the row lock. The attempt closes
+in the same transaction that marks delivery, schedules a fixed-delay retry or records a dead letter.
+
+Each worker process runs a finite number of delivery goroutines and one sweeper. The sweeper closes
+expired attempts and republishes bounded pages of due events. Redis messages contain tenant/event IDs;
+they are acknowledged after claim, and missing/duplicate messages are resolved from the durable state.
+Redis consumer metadata uses one shared consumer identity; exclusivity comes from PostgreSQL row leases.
+
+HTTP destinations are checked at DNS resolution and the selected IP is dialed directly. No redirects or
+environment proxies are followed. Headers, response reads, HTTP time and database operations are bounded.
+Response content is discarded. Readiness checks both backing services; liveness is independent of them.
+
+The diagram also shows planned management and dashboard components. M2 provides fixed 10-second
+retries, not the M3 exponential policy. Tests and measured limits are recorded in
+[testing/m1-m2-validation.md](testing/m1-m2-validation.md).
 
 ## What is deliberately absent
 
