@@ -120,7 +120,7 @@ Nothing is delivered. `cmd/worker` is a placeholder until M2, so events stay `pe
 | Path | Purpose |
 |---|---|
 | `cmd/eventrelay` | API server entry point |
-| `cmd/worker` | Delivery worker entry point |
+| `cmd/worker` | Delivery worker entry point (placeholder until M2) |
 | `internal/ingest` | HTTP handler, signature verification, validation, persistence |
 | `internal/config` | Environment parsing and validation |
 | `internal/observability` | Structured logging and Prometheus metrics |
