@@ -80,7 +80,7 @@ func (s *Store) Migrate(ctx context.Context, fsys fs.FS) error {
 	if err != nil {
 		return fmt.Errorf("connect for migrations: %w", err)
 	}
-	defer conn.Close(ctx)
+	defer func() { _ = conn.Close(ctx) }()
 
 	const createTable = `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
