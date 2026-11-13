@@ -2,9 +2,9 @@
 project: EventRelay
 slug: eventrelay
 owner: shellghostt
-status: skeleton
-version: 0.0.0
-language: Go 1.23
+status: mvp
+version: 0.1.0
+language: Go 1.26
 license: Apache-2.0
 rank: 1
 focus: Backend infrastructure
@@ -29,28 +29,38 @@ Read this block first. It is the fastest way to know what is true about this rep
 
 ```yaml
 project: EventRelay
-status: skeleton                 # skeleton | mvp | v1 | maintenance
-version: 0.0.0
-builds: true                     # `go build ./...` succeeds on the skeleton
-functional: false                # nothing below is implemented
+status: mvp                      # skeleton | mvp | v1 | maintenance
+version: 0.1.0
+builds: true
+functional: partial              # ingestion works end to end; nothing is delivered yet
 
 implemented:
-  - repository skeleton
-  - go module and two command entry points that print their version
+  - environment configuration with validation and redacted logging
+  - structured logging and prometheus metrics on /metrics
+  - postgres schema applied on start, recorded in schema_migrations
+  - POST /v1/endpoints and GET /v1/endpoints behind a static admin bearer token
+  - POST /v1/endpoints/{id}/events with HMAC-SHA256 verification and durable storage
+  - GET /v1/events with cursor pagination plus status and endpoint_id filters
+  - GET /healthz, GET /readyz (503 when postgres is unreachable)
+  - api/openapi.yaml describing exactly the implemented paths
+  - unit tests for signature vectors, config and ingest handler
+  - integration tests for the store, gated on EVENTRELAY_TEST_DATABASE_URL
 
 not_implemented:
-  - http ingestion api
-  - hmac verification
-  - postgres persistence
   - redis streams transport
   - delivery workers
   - retry scheduler
   - dead letter queue
   - replay
-  - api keys and multi-tenancy
+  - delivery history and attempt endpoints
+  - endpoint get, update, enable/disable and delete
+  - api keys and multi-tenancy (a single implicit tenant exists)
+  - idempotency enforcement (the header is accepted and ignored, see section 9.5)
   - dashboard
   - rate limiting
   - tracing
+  - retention job
+  - ssrf protection for destination urls
 
 source_of_truth:
   scope_and_design: docs/PLAN.md          # this file
@@ -149,7 +159,7 @@ Changing any of these requires a new ADR in `docs/adr/`.
 
 | # | Decision | Rationale |
 |---|---|---|
-| 1 | Go 1.23 | Long-lived connections, predictable concurrency, static binaries |
+| 1 | Go 1.26 | Long-lived connections, predictable concurrency, static binaries |
 | 2 | PostgreSQL is the source of truth | Redis may be flushed; the durable record must survive it |
 | 3 | Redis Streams is the transport, not the store | Consumer groups give at-least-once dispatch with minimal code |
 | 4 | At-least-once, never exactly-once | Duplicates are made cheap with a stable `event_id` |
@@ -320,7 +330,10 @@ Rules:
 
 - No `SELECT *`. Column lists are explicit.
 - Every query that returns tenant data filters by `tenant_id`.
-- `payload` is `jsonb` because users inspect it; no schema enforcement beyond "valid JSON object".
+- `payload` is `jsonb` because users inspect it; no schema enforcement beyond "valid JSON object". Because
+  it is `jsonb`, the stored document is re-serialised by Postgres: key order and insignificant whitespace are
+  not preserved. The signature is always verified against the raw request bytes, so this only affects what
+  readers see.
 - Payloads over 256 KiB are rejected at ingest with `413`.
 - `response_excerpt` is capped at 1 KiB and passes through the redactor before storage.
 
@@ -354,10 +367,14 @@ Errors are RFC 9457 problem documents:
 | GET | `/readyz` | none | Postgres + Redis reachable |
 | GET | `/metrics` | none | Prometheus text format |
 
+Implemented as of M1: the ingest path, `POST`/`GET /v1/endpoints`, `GET /v1/events`, `/healthz`,
+`/readyz` and `/metrics`. Every other row in this table is planned; see section 0 for the authoritative
+list.
+
 **Ingest request**
 
 ```http
-POST /v1/endpoints/ep_01H.../events
+POST /v1/endpoints/8a6037e2-0221-46dc-9fa5-505eddf64974/events
 X-EventRelay-Signature: t=1763000000,v1=5f2b...
 X-Event-Type: order.created
 Idempotency-Key: order_8891
@@ -366,7 +383,7 @@ Content-Type: application/json
 {"order_id":"8891","total":4200}
 ```
 
-`202 Accepted` → `{ "event_id": "evt_01H...", "status": "pending" }`
+`202 Accepted` → `{ "event_id": "634ceb6d-8184-49cc-8fcb-073954f783b1", "status": "pending" }`
 `200 OK` (idempotent repeat) → same body, no new event
 `401` bad signature · `404` unknown endpoint · `413` payload too large · `422` invalid JSON · `429` rate limited
 
@@ -445,6 +462,11 @@ Base delays, indexed by failed attempt number:
 `Idempotency-Key` is scoped per endpoint, retained 24 h. A repeat insert hits the partial unique index; the
 handler catches the conflict and returns the existing event. Never return `500` for a duplicate.
 
+**Current behaviour (M1):** the header is accepted for forward compatibility and ignored. No key is stored,
+so a repeat request creates a second event with a new `event_id`. The unique index exists in the schema but
+stays unused. Do not describe ingest as idempotent until this section is implemented and its acceptance
+criterion is ticked.
+
 ### 9.6 Ordering (M6, opt-in)
 
 `endpoints.ordered = true` means: one in-flight event per endpoint, and event `N+1` is not claimed before
@@ -522,14 +544,19 @@ Management endpoints for creating and listing endpoints. Health and readiness. O
 
 **Acceptance criteria**
 
-- [ ] Signed request with a valid signature returns `202` and a row exists in `events`
-- [ ] Tampered body returns `401` and writes nothing
-- [ ] Timestamp older than 300 s returns `401`
-- [ ] Missing `v1` in header returns `401`
-- [ ] Unknown endpoint returns `404`; oversized payload returns `413`
+- [x] Signed request with a valid signature returns `202` and a row exists in `events`
+- [x] Tampered body returns `401` and writes nothing
+- [x] Timestamp older than 300 s returns `401`
+- [x] Missing `v1` in header returns `401`
+- [x] Unknown endpoint returns `404`; oversized payload returns `413`
 - [ ] `go test -race ./...` green; integration tests use a real Postgres
-- [ ] `/readyz` returns `503` when Postgres is down
-- [ ] `api/openapi.yaml` validates and documents every implemented path
+- [x] `/readyz` returns `503` when Postgres is down
+- [x] `api/openapi.yaml` validates and documents every implemented path
+
+Status note: everything except the race run is verified on a local Windows machine against PostgreSQL 16.
+`go test ./...` passes and the integration tests run against a real database; `-race` needs cgo and the local
+toolchain cannot build it, so it is only proven when CI runs. Integration tests skip when
+`EVENTRELAY_TEST_DATABASE_URL` is unset.
 
 **Demo:** `docker compose up`, curl a signed event, `psql` shows the row.
 
@@ -818,7 +845,8 @@ event is the record; a delivery is the process.
 For a new maintainer or a new AI session, in order:
 
 1. Read this file, sections 0, 3, 4 and 9. Budget 10 minutes.
-2. Run `make build` and `./bin/eventrelay version`. Confirm the skeleton claim is still true.
+2. Run `make build`, `./bin/eventrelay version`, `make test`. Compare the result against section 0's
+   `functional` field. If they disagree, the code is newer than this document; update the document.
 3. Run `git log --oneline -20` and read the last merged PR description.
 4. Check the milestone table in section 12 and the checkboxes inside the current milestone. Those checkboxes
    are the definition of done.

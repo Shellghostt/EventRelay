@@ -44,6 +44,7 @@ services:
       EVENTRELAY_POSTGRES_DSN: postgresql://eventrelay:eventrelay@postgres:5432/eventrelay
       EVENTRELAY_REDIS_URL: redis://redis:6379/0
       EVENTRELAY_HTTP_ADDR: ":8080"
+      EVENTRELAY_ADMIN_TOKEN: ${EVENTRELAY_ADMIN_TOKEN:-dev-admin-token-change-me}
     ports:
       - "8080:8080"
 

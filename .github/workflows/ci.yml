@@ -47,6 +47,34 @@ jobs:
       - name: Build
         run: go build ./...
 
+  integration:
+    name: Integration tests (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: eventrelay
+          POSTGRES_PASSWORD: eventrelay
+          POSTGRES_DB: eventrelay
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U eventrelay -d eventrelay"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      EVENTRELAY_TEST_DATABASE_URL: postgres://eventrelay:eventrelay@localhost:55432/eventrelay?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Store integration tests
+        run: go test -race -count=1 ./internal/store
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

@@ -1,7 +1,8 @@
 # EventRelay Architecture
 
-**Status: planned. No implementation exists yet.** This document describes intended structure, not
-delivered behaviour. The authoritative specification is [PLAN.md](PLAN.md).
+**Status: partially implemented (M1).** The ingestion path described here exists; delivery, the Redis
+transport and the dashboard do not. This document describes intended structure, not delivered behaviour. The
+authoritative specification is [PLAN.md](PLAN.md), and section 0 there is the current truth.
 
 ## Context
 

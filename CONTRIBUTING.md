@@ -27,6 +27,14 @@ make test        # unit tests
 make lint        # formatting and static analysis
 ```
 
+Integration tests need a real PostgreSQL instance and are skipped without one:
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d postgres
+EVENTRELAY_TEST_DATABASE_URL='postgres://eventrelay:eventrelay@localhost:55432/eventrelay?sslmode=disable' \
+  go test ./internal/store
+```
+
 ## Commit messages
 
 Conventional Commits, imperative mood, no trailing period:

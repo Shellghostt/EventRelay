@@ -34,7 +34,7 @@ body:
     id: env
     attributes:
       label: Environment
-      placeholder: Windows 11, Docker 29.9.2, Go 1.23.4
+      placeholder: Windows 11, Docker 29.9.2, Go 1.26.4
     validations:
       required: true
   - type: textarea

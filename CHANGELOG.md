@@ -7,11 +7,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.0] - 2026-11-13
+
+Milestone M1: ingestion and durability.
+
 ### Added
 
-- Repository skeleton: build tooling, CI, documentation standards and the implementation plan.
+- Event ingestion: `POST /v1/endpoints/{id}/events`, HMAC-SHA256 verification over the raw body, durable
+  storage as a `pending` event, `202` with a stable `event_id`.
+- Endpoint management: `POST /v1/endpoints` (returns both secrets once) and `GET /v1/endpoints` (never
+  returns secrets), protected by a static admin bearer token.
+- Event listing: `GET /v1/events` with cursor pagination and `status` / `endpoint_id` filters.
+- PostgreSQL schema for the full v1 data model, applied on start and recorded in `schema_migrations`.
+- Operational endpoints: `/healthz`, `/readyz` (503 when PostgreSQL is unreachable), `/metrics`.
+- Configuration through `EVENTRELAY_*` environment variables with startup validation.
+- `pkg/hmacsign`: public signing and verification helpers with published test vectors.
+- `api/openapi.yaml` covering the implemented paths only.
 
-Nothing functional yet. See [docs/PLAN.md](docs/PLAN.md) for what is scheduled.
+### Known limitations
+
+- No delivery. Events remain `pending`; the worker and retry scheduler arrive in M2 and M3.
+- `Idempotency-Key` is accepted and ignored, so a retry creates a second event.
+- Single implicit tenant; API keys and multi-tenancy are M5.
 
 ## [0.0.0] - 2026-11-13
 
