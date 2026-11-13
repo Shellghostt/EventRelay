@@ -35,6 +35,20 @@ EVENTRELAY_TEST_DATABASE_URL='postgres://eventrelay:eventrelay@localhost:55432/e
   go test ./internal/store
 ```
 
+## Code navigation
+
+[CodeGraph](https://github.com/colbymchenry/codegraph) builds a local symbol index of this
+repository. It is optional: neither the build nor CI depends on it.
+
+```bash
+codegraph init --yes .   # build the index once
+codegraph status          # whether the index is current
+codegraph sync            # refresh it after a change
+```
+
+The index lives in `.codegraph/`. Git ignores its database and temporary files; the
+`.codegraph/.gitignore` that enforces that is tracked.
+
 ## Commit messages
 
 Conventional Commits, imperative mood, no trailing period:
