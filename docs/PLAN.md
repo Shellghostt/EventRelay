@@ -549,14 +549,16 @@ Management endpoints for creating and listing endpoints. Health and readiness. O
 - [x] Timestamp older than 300 s returns `401`
 - [x] Missing `v1` in header returns `401`
 - [x] Unknown endpoint returns `404`; oversized payload returns `413`
-- [ ] `go test -race ./...` green; integration tests use a real Postgres
+- [x] `go test -race ./...` green; integration tests use a real Postgres
 - [x] `/readyz` returns `503` when Postgres is down
 - [x] `api/openapi.yaml` validates and documents every implemented path
 
 Status note: everything except the race run is verified on a local Windows machine against PostgreSQL 16.
 `go test ./...` passes and the integration tests run against a real database; `-race` needs cgo and the local
 toolchain cannot build it, so it is only proven when CI runs. Integration tests skip when
-`EVENTRELAY_TEST_DATABASE_URL` is unset.
+`EVENTRELAY_TEST_DATABASE_URL` is unset. CI has now run it: the first run on GitHub on 2026-11-13 executed
+`go test -race` on ubuntu-latest, windows-latest and macos-latest, and the PostgreSQL integration job
+passed.
 
 **Demo:** `docker compose up`, curl a signed event, `psql` shows the row.
 
@@ -676,6 +678,7 @@ PR-sized units, ordered. `ER-` prefix for issue titles.
 | ER-034 | Load test scenarios and report | ER-014 | M6 |
 | ER-035 | Retention job for delivered events | ER-002 | M6 |
 | ER-036 | Deployment guide and production checklist | ER-030 | M6 |
+| ER-037 | Trusted-proxy client-IP attribution with an allowlist | ER-001 | M2 |
 
 ---
 
@@ -739,6 +742,7 @@ DLQ size rising for 15 min · stream lag > 1,000 for 5 min · delivery error rat
 | Replay of a captured request | Timestamp window + optional `Idempotency-Key` |
 | SSRF via endpoint URL | Block link-local, loopback and metadata ranges by default; `EVENTRELAY_ALLOW_PRIVATE_TARGETS=true` to opt out, documented as dangerous |
 | Secret leakage in logs | Secrets never logged; header redaction in the HTTP middleware |
+| Spoofed client IP in logs | The peer address is logged as it arrives; forwarded headers are ignored because the client chooses them |
 | Cross-tenant read | Every query filters by `tenant_id`; leak tests in M5 |
 | Timing attack on signature | `hmac.Equal` only |
 | API key theft | Argon2id at rest, prefix lookup, revocation, `last_used_at` visibility |
@@ -746,7 +750,8 @@ DLQ size rising for 15 min · stream lag > 1,000 for 5 min · delivery error rat
 | Unbounded resource use | Payload cap, per-tenant rate limit, bounded worker queue |
 | Dependency compromise | `govulncheck` in CI, `go.sum`, pinned base images |
 
-Non-goals for security: no WAF, no IP allowlisting in v1, no mutual TLS to destinations.
+Non-goals for security: no WAF, no IP allowlisting in v1, no trusted-proxy client-IP attribution in
+v1, no mutual TLS to destinations.
 
 ---
 

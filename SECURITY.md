@@ -33,5 +33,6 @@ by an automated scanner with no analysis.
 ## Hardening expectations
 
 - Dependencies are scanned in CI with `govulncheck`.
+- The build toolchain is pinned in `go.mod` and is on a supported Go release line.
 - Secrets are never logged. Payload logging is opt-in and redacted.
 - Every release artifact is produced by CI, not by a laptop.

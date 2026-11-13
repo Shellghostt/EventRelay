@@ -7,7 +7,35 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
-Nothing yet.
+### Security
+
+- The request log no longer uses `chi`'s `middleware.RealIP`. That middleware copies
+  `X-Forwarded-For` into `r.RemoteAddr` whether or not a proxy set it, so a client could forge the
+  address it was logged under. The peer address is now logged in the `remote_addr` field, and
+  forwarded headers are never used to attribute a request to an address. Client-IP attribution
+  behind a reverse proxy is not implemented: it needs a trusted-proxy allowlist, and it is tracked
+  as `ER-037`.
+
+### Changed
+
+- The repository is published at https://github.com/Shellghostt/EventRelay and the CI workflow has
+  executed. The first run on 2026-11-13 passed the build, test and PostgreSQL integration jobs on all
+  three operating systems, including `go test -race`; the lint and vulnerability jobs failed on that
+  run and are fixed by the entries above.
+- The module declares `toolchain go1.26.11`. `actions/setup-go` prefers that directive over the `go`
+  directive, so CI installs the patched toolchain instead of exactly Go 1.26.0, which carries three
+  known standard-library vulnerabilities.
+- The linter is golangci-lint v2.15.0, pinned by version, run by `golangci/golangci-lint-action@v9`.
+  The v1 line cannot analyse a Go 1.26 module. Both findings it produced were fixed in the code.
+
+### Fixed
+
+- The migration runner no longer discards the error returned when the connection is closed.
+
+### Planned
+
+- M2: transport and workers — events published to a Redis Stream, a worker pool that claims
+  leases and delivers over HTTP, and one recorded attempt per delivery.
 
 ## [0.1.0] - 2026-11-13
 
