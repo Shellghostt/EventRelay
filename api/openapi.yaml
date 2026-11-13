@@ -1,0 +1,16 @@
+openapi: 3.1.0
+info:
+  title: EventRelay API
+  version: 0.0.0
+  description: |
+    Status: skeleton. Only the paths that are implemented may appear here.
+    Adding a path before implementing it is treated as a documentation bug.
+servers:
+  - url: http://localhost:8080
+    description: Local development
+paths: {}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/shellghostt/eventrelay/blob/main/SECURITY.md
+    about: Do not open a public issue for security problems. Read SECURITY.md first.
+  - name: Read the plan first
+    url: https://github.com/shellghostt/eventrelay/blob/main/docs/PLAN.md
+    about: Most "how should this work" questions are already answered in the implementation plan.
