@@ -40,8 +40,11 @@ func NewRouter(d Deps) http.Handler {
 	s := &server{store: d.Store, cfg: d.Config, log: d.Log}
 
 	r := chi.NewRouter()
+	// The peer address is logged as it arrives. Forwarded headers such as
+	// X-Forwarded-For are chosen by the client, so they are never used to
+	// attribute a request to an IP address; trusting them would let a caller
+	// forge its own address in the logs.
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
 	r.Use(s.observe)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
@@ -144,7 +147,7 @@ func (s *server) observe(next http.Handler) http.Handler {
 			"status", rec.status,
 			"duration_ms", elapsed.Milliseconds(),
 			"request_id", middleware.GetReqID(r.Context()),
-			"remote", r.RemoteAddr,
+			"remote_addr", r.RemoteAddr,
 		)
 	})
 }
