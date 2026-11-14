@@ -123,7 +123,7 @@ func (s *server) listEndpoints(w http.ResponseWriter, r *http.Request) {
 }
 
 // validateDestinationURL rejects anything that is not a plain http(s) URL.
-// SSRF protection for private ranges arrives with the delivery worker in M2.
+// The delivery client separately checks resolved addresses before dialing.
 func validateDestinationURL(raw string) error {
 	if raw == "" {
 		return errors.New("url is required")

@@ -33,6 +33,10 @@ type EventWriter interface {
 	InsertEvent(ctx context.Context, tenantID, endpointID uuid.UUID, eventType string, payload []byte, idempotencyKey string) (store.Event, error)
 }
 
+type Publisher interface {
+	Publish(context.Context, store.Dispatch) error
+}
+
 // Handler serves POST /v1/endpoints/{id}/events.
 type Handler struct {
 	Endpoints       EndpointLookup
@@ -40,6 +44,7 @@ type Handler struct {
 	MaxPayloadBytes int64
 	Tolerance       time.Duration
 	Now             func() time.Time
+	Publisher       Publisher
 }
 
 const maxEventTypeLength = 200
@@ -134,7 +139,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"The payload must be a JSON object.")
 		return
 	}
-	if err := json.Unmarshal(body, &probe); err != nil {
+	if err := json.Unmarshal(body, &probe); err != nil || probe == nil {
 		h.reject(w, http.StatusUnprocessableEntity, "invalid-payload", "Invalid payload",
 			"The payload must be a JSON object.")
 		return
@@ -161,6 +166,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	observability.IngestTotal.WithLabelValues("accepted").Inc()
+	if h.Publisher != nil {
+		publishCtx, cancel := context.WithTimeout(r.Context(), 100*time.Millisecond)
+		if err := h.Publisher.Publish(publishCtx, store.Dispatch{TenantID: event.TenantID, EventID: event.ID}); err != nil {
+			observability.PublishFailures.Inc()
+		}
+		cancel()
+	}
 	httpx.JSON(w, http.StatusAccepted, map[string]any{
 		"event_id": event.ID.String(),
 		"status":   event.Status,

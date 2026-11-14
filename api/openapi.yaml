@@ -40,7 +40,7 @@ paths:
     get:
       tags: [Operations]
       summary: Readiness probe
-      description: Fails with 503 when PostgreSQL is unreachable.
+      description: Fails with 503 when PostgreSQL or Redis is unreachable. Ingestion remains durable during a Redis outage.
       operationId: getReadyz
       security: []
       responses:

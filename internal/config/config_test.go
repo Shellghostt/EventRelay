@@ -15,6 +15,7 @@ func env(pairs map[string]string) func(string) string {
 
 func validEnv() map[string]string {
 	return map[string]string{
+		"EVENTRELAY_REDIS_URL":    "redis://localhost:6379/0",
 		"EVENTRELAY_POSTGRES_DSN": "postgres://user:secret@localhost:5432/eventrelay",
 		"EVENTRELAY_ADMIN_TOKEN":  "0123456789abcdef0123456789abcdef",
 	}
@@ -130,5 +131,19 @@ func TestRedactedHidesPassword(t *testing.T) {
 	}
 	if redacted["admin_token_set"] != true {
 		t.Fatal("admin_token_set should be true")
+	}
+}
+
+func TestRedactedHidesQueryAndUsernameCredentials(t *testing.T) {
+	for _, dsn := range []string{
+		"postgres://user:secret@localhost/db?password=querysecret",
+		"postgres://user@localhost/db?sslpassword=querysecret#secret",
+		"postgres://secret@localhost/db",
+		"host=localhost password=secret",
+	} {
+		cfg := config.Config{PostgresDSN: dsn}
+		if strings.Contains(cfg.Redacted()["postgres_dsn"].(string), "secret") {
+			t.Fatal("configuration redaction leaked a credential")
+		}
 	}
 }

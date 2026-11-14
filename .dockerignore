@@ -1,0 +1,10 @@
+.git
+.codegraph
+.env
+.env.*
+bin
+dist
+tests/load/results
+*.out
+coverage.*
+.golangci-lint-cache

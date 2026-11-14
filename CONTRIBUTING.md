@@ -27,13 +27,17 @@ make test        # unit tests
 make lint        # formatting and static analysis
 ```
 
-Integration tests need a real PostgreSQL instance and are skipped without one:
+Integration tests need real PostgreSQL and Redis services and are skipped without the relevant URLs:
 
 ```bash
-docker compose -f deploy/docker-compose.yml up -d postgres
-EVENTRELAY_TEST_DATABASE_URL='postgres://eventrelay:eventrelay@localhost:55432/eventrelay?sslmode=disable' \
-  go test ./internal/store
+docker compose -f deploy/docker-compose.yml up -d postgres redis
+EVENTRELAY_TEST_DATABASE_URL='postgres://eventrelay:eventrelay@localhost:55434/eventrelay?sslmode=disable' \
+EVENTRELAY_TEST_REDIS_URL='redis://localhost:56380/0' \
+  go test -race -count=1 -timeout 120s ./internal/store ./tests/integration
 ```
+
+Use disposable services: delivery tests isolate their schema/key, while the M1 store test uses the
+default schema. [deploy/README.md](deploy/README.md) includes Windows commands, the delivery demo and load tests.
 
 ## Code navigation
 

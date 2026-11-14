@@ -236,11 +236,14 @@ func TestIngestRejectsInvalidJSON(t *testing.T) {
 }
 
 func TestIngestRejectsNonObjectPayload(t *testing.T) {
-	h := newHarness(t, nil)
-
-	rec := h.do(t, h.endpoints.endpoint.ID, `[1,2,3]`, fixedTime.Unix(), secret)
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422", rec.Code)
+	for _, body := range []string{`[1,2,3]`, `null`, ` null `, `true`, `42`, `"text"`} {
+		t.Run(body, func(t *testing.T) {
+			h := newHarness(t, nil)
+			rec := h.do(t, h.endpoints.endpoint.ID, body, fixedTime.Unix(), secret)
+			if rec.Code != http.StatusUnprocessableEntity || len(h.events.inserted) != 0 {
+				t.Fatalf("status = %d, inserted = %d; want 422 and no writes", rec.Code, len(h.events.inserted))
+			}
+		})
 	}
 }
 

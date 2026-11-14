@@ -13,6 +13,7 @@ import (
 var Registry = prometheus.NewRegistry()
 
 var (
+	PublishFailures = prometheus.NewCounter(prometheus.CounterOpts{Name: "eventrelay_publish_failures_total", Help: "Ingest publish failures; durable events are recovered by the sweeper."})
 	// IngestTotal counts accepted and rejected ingest requests.
 	IngestTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "eventrelay_events_ingested_total",
@@ -42,6 +43,7 @@ var (
 
 func init() {
 	Registry.MustRegister(
+		PublishFailures,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		IngestTotal,

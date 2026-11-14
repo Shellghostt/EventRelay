@@ -2,14 +2,13 @@
 
 > Self-hosted webhook infrastructure with reliable delivery, event replay, retries and observability.
 
-![status](https://img.shields.io/badge/status-M1_ingest-orange)
+![status](https://img.shields.io/badge/status-M2_delivery-orange)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 ![Go](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)
 
-**Status: M1 (v0.1.0).** You can create a webhook endpoint, send it a correctly signed event, and read the
-event back from PostgreSQL. **Nothing is delivered yet** — ingested events stay `pending` until the worker
-arrives in M2. Do not run this as a webhook service. Everything else in the table below is marked for what it
-is.
+**Status: M2 (unreleased).** Signed events are stored durably and dispatched through Redis Streams to
+independently scaled HTTP workers. Delivery is at least once: destinations must deduplicate by event ID.
+M2 uses a fixed 10-second retry delay and caps attempts; the full backoff and Retry-After policy is M3.
 
 ## Why this exists
 
@@ -25,7 +24,7 @@ can read end to end does not really exist as a mature open-source project. Event
 | Multi-tenant webhook endpoints | M5 | Not started |
 | Event ingestion and persistence | M1 | **Done** |
 | HMAC signature verification | M1 | **Done** |
-| Asynchronous delivery workers | M2 | Not started |
+| Asynchronous delivery workers | M2 | **Done (unreleased)** |
 | Configurable retry policies | M3 | Not started |
 | Dead-letter queue | M3 | Not started |
 | Request inspection and delivery history | M4 | Not started |
@@ -33,7 +32,7 @@ can read end to end does not really exist as a mature open-source project. Event
 | API key management | M5 | Not started |
 | OpenAPI documentation | M1 | **Done** (implemented paths only) |
 | Per-tenant rate limits | M5 | Not started |
-| Horizontal worker scaling | M2 | Not started |
+| Horizontal worker scaling | M2 | **Done (unreleased)** |
 | Idempotency keys | M5 | Not started (header accepted, ignored) |
 | Event ordering options | M6 | Not started |
 | Distributed tracing | M6 | Not started |
@@ -68,15 +67,11 @@ keeping event_id stable across every attempt.
 
 ## Quickstart
 
-Requires Go 1.26+ and Docker. Start PostgreSQL, then the API:
+Requires Docker. Start the API, PostgreSQL, Redis and four worker processes:
 
 ```bash
-docker compose -f deploy/docker-compose.yml up -d postgres
-
-export EVENTRELAY_POSTGRES_DSN='postgres://eventrelay:eventrelay@localhost:55432/eventrelay?sslmode=disable'
-export EVENTRELAY_ADMIN_TOKEN='dev-admin-token-change-me'   # at least 16 characters
-make build
-./bin/eventrelay
+export EVENTRELAY_ADMIN_TOKEN='dev-admin-token-change-me'
+docker compose -f deploy/docker-compose.yml up -d --build --scale worker=4
 ```
 
 The schema is applied on start. Create an endpoint — the two secrets are printed once and never again:
@@ -91,9 +86,11 @@ curl -s -X POST http://localhost:8080/v1/endpoints \
 Send a signed event. The signature covers the exact raw body:
 
 ```bash
+# Decode the base64 ingest_secret returned by endpoint creation into hex.
+INGEST_SECRET_HEX=$(printf '%s' "$INGEST_SECRET" | openssl base64 -d -A | od -An -v -tx1 | tr -d ' \n')
 BODY='{"order_id":"8891","total":4200}'
 TS=$(date +%s)
-SIG=$(printf 'v1:%s:%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$INGEST_SECRET_HEX" -r | cut -d' ' -f1)
+SIG=$(printf 'v1:%s:%s' "$TS" "$BODY" | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$INGEST_SECRET_HEX" -r | cut -d' ' -f1)
 
 curl -i -X POST "http://localhost:8080/v1/endpoints/$ENDPOINT_ID/events" \
   -H "X-EventRelay-Signature: t=$TS,v1=$SIG" \
@@ -113,19 +110,32 @@ Two things to know about the stored payload: it is a `jsonb` column, so PostgreS
 order plus whitespace will differ from what you sent. Signature verification always uses the raw request
 bytes, so this does not weaken the check.
 
-Nothing is delivered. `cmd/worker` is a placeholder until M2, so events stay `pending` forever.
+Workers sign the stored JSON with the separate delivery secret. Private and loopback destinations are
+blocked unless `EVENTRELAY_ALLOW_PRIVATE_TARGETS=true` is explicitly set for local testing. Redirects are
+never followed. Inspect attempts with SQL until the M4 inspection API arrives:
+
+```sql
+SELECT event_id, attempt_no, outcome, response_status, duration_ms
+FROM delivery_attempts ORDER BY id;
+```
+
+See [the runnable delivery demo](deploy/README.md) and [M2 decisions](docs/adr/0004-m2-delivery.md).
+The [recorded four-process load run](docs/benchmarks/m2-delivery.md) delivered 10,000 events in 58.84 s.
+See [validation and limits](docs/testing/m1-m2-validation.md) before interpreting the result.
 
 ## Repository layout
 
 | Path | Purpose |
 |---|---|
 | `cmd/eventrelay` | API server entry point |
-| `cmd/worker` | Delivery worker entry point (placeholder until M2) |
+| `cmd/worker` | Delivery worker entry point |
 | `internal/ingest` | HTTP handler, signature verification, validation, persistence |
 | `internal/config` | Environment parsing and validation |
 | `internal/observability` | Structured logging and Prometheus metrics |
 | `internal/httpx` | RFC 9457 problem documents and JSON responses |
-| `internal/delivery` | HTTP delivery, attempt recording, result classification (empty until M2) |
+| `internal/delivery` | Signed HTTP delivery and result classification |
+| `internal/stream` | Bounded Redis dispatch and pending-entry cleanup |
+| `internal/worker` | Lease, delivery, completion and recovery loops |
 | `internal/store` | PostgreSQL access, queries, migrations runner |
 | `internal/retry` | Backoff schedule, scheduling, dead-letter promotion (empty until M3) |
 | `internal/auth` | API keys and tenant resolution (empty until M5) |
@@ -141,7 +151,7 @@ Nothing is delivered. `cmd/worker` is a placeholder until M2, so events stay `pe
 | Milestone | Deliverable | Status |
 |---|---|---|
 | M1 | HTTP ingestion API and durable event storage | **Done** (v0.1.0) |
-| M2 | Redis Streams transport, worker pool, horizontal scaling | Not started |
+| M2 | Redis Streams transport, worker pool, horizontal scaling | **Done (unreleased)** |
 | M3 | Retry scheduler and dead-letter queue | Not started |
 | M4 | Dashboard, request inspection and manual replay | Not started |
 | M5 | Multi-tenancy, API keys, rate limits, idempotency | Not started |

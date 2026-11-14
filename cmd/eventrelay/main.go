@@ -1,7 +1,6 @@
 // Command eventrelay serves the ingest and management HTTP API.
 //
-// Known limitation: this binary does not deliver anything yet. Ingested events
-// are stored as pending; the worker and retry scheduler arrive in M2 and M3.
+// Delivery runs independently in cmd/worker.
 package main
 
 import (
@@ -19,6 +18,7 @@ import (
 	"github.com/shellghostt/eventrelay/internal/config"
 	"github.com/shellghostt/eventrelay/internal/observability"
 	"github.com/shellghostt/eventrelay/internal/store"
+	"github.com/shellghostt/eventrelay/internal/stream"
 	"github.com/shellghostt/eventrelay/migrations"
 )
 
@@ -68,9 +68,14 @@ func run() error {
 		log.Info("migrations applied")
 	}
 
+	transport, err := stream.Open(cfg.RedisURL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = transport.Close() }()
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           api.NewRouter(api.Deps{Store: st, Config: cfg, Log: log}),
+		Handler:           api.NewRouter(api.Deps{Store: st, Config: cfg, Log: log, Publisher: transport, RedisPing: transport.Ping}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

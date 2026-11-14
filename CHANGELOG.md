@@ -9,6 +9,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- M2 Redis transport, signed HTTP workers, exclusive fenced leases, attempt recording, crash recovery,
+  fixed-delay retries, terminal dead-letter records, private-destination protection and worker scaling.
+- Explicit trusted-proxy CIDRs with right-to-left X-Forwarded-For validation (ER-037).
+- Real PostgreSQL/Redis recovery tests, a four-process Compose load test, and a runnable signed demo.
+
 - The repository tracks CodeGraph's index ignore rules and documents it as an optional local tool
   for code navigation. Nothing in the build or in CI depends on it.
 
@@ -17,12 +22,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - The request log no longer uses `chi`'s `middleware.RealIP`. That middleware copies
   `X-Forwarded-For` into `r.RemoteAddr` whether or not a proxy set it, so a client could forge the
   address it was logged under. The peer address is now logged in the `remote_addr` field, and
-  forwarded headers are never used to attribute a request to an address. Client-IP attribution
-  behind a reverse proxy is not implemented: it needs a trusted-proxy allowlist, and it is tracked
-  as `ER-037`.
+  `client_ip` field considers X-Forwarded-For only from configured trusted proxy CIDRs (ER-037).
+- Destination response content is omitted from storage. Outbound requests have bounded headers/body
+  reads, use no environment proxy, reject private resolved addresses and never follow redirects.
 
 ### Changed
 
+- Readiness checks both PostgreSQL and Redis. Feature and fix branches trigger the CI matrix and
+  the PostgreSQL/Redis delivery integration job.
 - The repository is published at https://github.com/Shellghostt/EventRelay and the CI workflow has
   executed. The first run on 2026-11-13 passed the build, test and PostgreSQL integration jobs on all
   three operating systems, including `go test -race`; the lint and vulnerability jobs failed on that
@@ -35,12 +42,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
-- The migration runner no longer discards the error returned when the connection is closed.
+- Integration CI uses Docker-assigned PostgreSQL/Redis host ports and waits for PostgreSQL TCP
+  readiness, avoiding runner port conflicts before the delivery tests can start.
+- M1 signed JSON null rejection, DSN query/username credential redaction, repeatable integration queries,
+  Compose build context and base64-to-hex signing instructions. Migrations serialize concurrent startup.
+- Completion checks lease expiry after acquiring the row lock, so lock contention cannot permit a stale
+  success. Truncated non-retryable HTTP responses retain their terminal classification.
 
 ### Planned
 
-- M2: transport and workers — events published to a Redis Stream, a worker pool that claims
-  leases and delivers over HTTP, and one recorded attempt per delivery.
+- M3: exponential backoff, jitter, Retry-After and full dead-letter queue policy.
 
 ## [0.1.0] - 2026-11-13
 

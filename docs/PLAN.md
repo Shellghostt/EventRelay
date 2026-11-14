@@ -32,25 +32,27 @@ project: EventRelay
 status: mvp                      # skeleton | mvp | v1 | maintenance
 version: 0.1.0
 builds: true
-functional: partial              # ingestion works end to end; nothing is delivered yet
+functional: partial              # ingestion and M2 delivery work; M3-M6 remain
 
 implemented:
+  - Redis Streams dispatch with durable PostgreSQL republication
+  - bounded signed HTTP workers, fenced leases, crash recovery and recorded attempts
+  - fixed 10 s retries and terminal dead-letter records (full policy is M3)
+  - destination IP protection and explicit trusted-proxy attribution
   - environment configuration with validation and redacted logging
   - structured logging and prometheus metrics on /metrics
   - postgres schema applied on start, recorded in schema_migrations
   - POST /v1/endpoints and GET /v1/endpoints behind a static admin bearer token
   - POST /v1/endpoints/{id}/events with HMAC-SHA256 verification and durable storage
   - GET /v1/events with cursor pagination plus status and endpoint_id filters
-  - GET /healthz, GET /readyz (503 when postgres is unreachable)
+  - GET /healthz, GET /readyz (503 when PostgreSQL or Redis is unreachable)
   - api/openapi.yaml describing exactly the implemented paths
   - unit tests for signature vectors, config and ingest handler
   - integration tests for the store, gated on EVENTRELAY_TEST_DATABASE_URL
 
 not_implemented:
-  - redis streams transport
-  - delivery workers
-  - retry scheduler
-  - dead letter queue
+  - exponential retry scheduler with jitter and Retry-After
+  - full retry/backoff policy and DLQ management
   - replay
   - delivery history and attempt endpoints
   - endpoint get, update, enable/disable and delete
@@ -60,7 +62,6 @@ not_implemented:
   - rate limiting
   - tracing
   - retention job
-  - ssrf protection for destination urls
 
 source_of_truth:
   scope_and_design: docs/PLAN.md          # this file
@@ -217,12 +218,13 @@ flowchart LR
 If the insert succeeds and the publish fails, the event is still `pending` and the scheduler sweep picks it
 up. A failed publish is never a lost event.
 
-**Delivery.** Worker claims a `pending` event whose `next_attempt_at <= now()` using
-`UPDATE ... WHERE id = (SELECT ... FOR UPDATE SKIP LOCKED) RETURNING *`, sets `status=in_flight`,
-`lease_expires_at=now()+60s`. Posts to the destination. Records an attempt row. Then:
+**Delivery (M2).** A worker claims a due `pending` event using `FOR UPDATE SKIP LOCKED`, sets
+`status=in_flight`, a random lease token and `lease_expires_at=now()+60s`, and increments `attempt_count`.
+It inserts the attempt before committing the claim and beginning HTTP I/O. Completion locks the event,
+checks the token, attempt number and database wall time, then commits the attempt and event together:
 
 - 2xx → `status=delivered`, `delivered_at=now()`
-- retryable → `status=pending`, `attempt_count++`, `next_attempt_at=now()+backoff`
+- retryable → `status=pending`, `next_attempt_at=now()+10s` (M3 replaces this with backoff)
 - non-retryable → `status=dead_lettered`, insert `dead_letters`
 - exhausted → `status=dead_lettered`
 
@@ -300,7 +302,7 @@ CREATE TABLE delivery_attempts (
     finished_at       timestamptz,
     outcome           text NOT NULL,          -- success | retryable | non_retryable | timeout | network
     response_status   integer,
-    response_excerpt  text,                   -- first 1 KiB, redacted
+    response_excerpt  text,                   -- NULL in M2; response content is discarded
     error             text,
     duration_ms       integer
 );
@@ -335,7 +337,7 @@ Rules:
   not preserved. The signature is always verified against the raw request bytes, so this only affects what
   readers see.
 - Payloads over 256 KiB are rejected at ingest with `413`.
-- `response_excerpt` is capped at 1 KiB and passes through the redactor before storage.
+- M2 reads at most 1 KiB of a response and discards it; `response_excerpt` is NULL (ADR 0004).
 
 ---
 
@@ -367,7 +369,7 @@ Errors are RFC 9457 problem documents:
 | GET | `/readyz` | none | Postgres + Redis reachable |
 | GET | `/metrics` | none | Prometheus text format |
 
-Implemented as of M1: the ingest path, `POST`/`GET /v1/endpoints`, `GET /v1/events`, `/healthz`,
+Implemented as of M2: the ingest path, `POST`/`GET /v1/endpoints`, `GET /v1/events`, `/healthz`,
 `/readyz` and `/metrics`. Every other row in this table is planned; see section 0 for the authoritative
 list.
 
@@ -413,6 +415,9 @@ Outbound requests add `X-EventRelay-Event-Id`, `X-EventRelay-Attempt`, and `User
 
 ### 9.2 Retry schedule
 
+The following full policy is planned for M3. M2 uses a fixed 10-second delay and already enforces
+`max_attempts`, non-retryable failures, terminal dead letters and endpoint disabling on HTTP 410.
+
 Base delays, indexed by failed attempt number:
 
 | Failed attempt | Delay |
@@ -448,13 +453,13 @@ Base delays, indexed by failed attempt number:
 
 1. A stored event is never deleted except by endpoint deletion or retention policy.
 2. `event_id` is immutable and identical across every attempt, replay and duplicate.
-3. `delivery_attempts` is append-only. Never update an attempt row. An attempt without `finished_at` is an
-   interrupted attempt.
+3. Attempt identity is immutable. Insert the attempt on claim, then close that same row exactly once
+   through fenced completion or expiry recovery. A row without `finished_at` is in progress or interrupted.
 4. Delivery never begins before the event is committed to Postgres.
-5. A worker holds a lease for at most 60 s and renews it only while the HTTP call is in flight.
+5. A worker uses a finite lease (default 60 s), without renewal in M2. HTTP timeout is shorter than the lease.
 6. Every outbound request carries the same `event_id`, even on replay.
-7. Nothing in the delivery path is allowed to block on Redis. Redis being down degrades throughput, not
-   correctness.
+7. Redis I/O has finite deadlines. Redis being down delays dispatch; durable events are republished when
+   it returns. A completion write does not depend on Redis.
 8. Duplicate delivery is a documented possibility. Duplicate *loss* is a bug.
 
 ### 9.5 Idempotency (M5)
@@ -514,6 +519,7 @@ Environment variables, prefix `EVENTRELAY_`. No config file in v1.
 | Variable | Default | Notes |
 |---|---|---|
 | `EVENTRELAY_HTTP_ADDR` | `:8080` | API listen address |
+| `EVENTRELAY_ADMIN_TOKEN` | required by API | management bearer token, at least 16 characters; not required by workers |
 | `EVENTRELAY_POSTGRES_DSN` | required | `postgres://user:pass@host:5432/db` |
 | `EVENTRELAY_REDIS_URL` | required | `redis://host:6379/0` |
 | `EVENTRELAY_WORKERS` | `8` | delivery goroutines per process |
@@ -524,9 +530,18 @@ Environment variables, prefix `EVENTRELAY_`. No config file in v1.
 | `EVENTRELAY_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 | `EVENTRELAY_LOG_FORMAT` | `json` | `json` or `text` |
 | `EVENTRELAY_SWEEP_INTERVAL_SECONDS` | `5` | sweeper tick for due events and expired leases |
-| `EVENTRELAY_RETENTION_DAYS` | `30` | delivered events older than this are pruned |
-| `EVENTRELAY_OTEL_EXPORTER` | `none` | `none` or `otlp` |
-| `EVENTRELAY_OTEL_ENDPOINT` | empty | collector address |
+| `EVENTRELAY_SHUTDOWN_TIMEOUT_SECONDS` | `15` | API shutdown deadline |
+| `EVENTRELAY_MIGRATE_ON_START` | `true` | apply pending migrations under a shared advisory lock |
+| `EVENTRELAY_ALLOW_PRIVATE_TARGETS` | `false` | allow private destinations for local testing |
+| `EVENTRELAY_TRUSTED_PROXIES` | empty | comma-separated trusted proxy CIDRs |
+| `EVENTRELAY_RETENTION_DAYS` | `30` | parsed; retention job is M6 |
+
+`EVENTRELAY_OTEL_EXPORTER` and `EVENTRELAY_OTEL_ENDPOINT` are planned for M6 and are not parsed yet.
+
+M2 adds `EVENTRELAY_ALLOW_PRIVATE_TARGETS` (false) and `EVENTRELAY_TRUSTED_PROXIES`
+(empty, comma-separated CIDRs). Only X-Forwarded-For from explicitly trusted peers is considered;
+`remote_addr` always records the socket peer. See ADR 0004. The HTTP timeout must be shorter than
+the lease. Responses are read up to 1 KiB and discarded; `response_excerpt` remains NULL.
 
 Never log secrets, full payloads (unless `EVENTRELAY_LOG_PAYLOADS=true` in development) or `Authorization`
 headers.
@@ -569,12 +584,20 @@ records attempts. Horizontal scaling via `docker compose up --scale worker=4`.
 
 **Acceptance criteria**
 
-- [ ] A pending event is delivered within 1 s of ingest on an idle system
-- [ ] Worker killed mid-flight (`SIGKILL`) → event reappears after lease expiry, no loss
-- [ ] Two workers compete for the same event and exactly one delivers it per lease
-- [ ] `delivery_attempts` contains one row per attempt with outcome and duration
-- [ ] Destination returning 500 causes a retry; destination returning 400 causes dead-letter
-- [ ] 4 workers sustain 10,000 events/min in `tests/load` with no unbounded memory growth
+- [x] A pending event is delivered within 1 s of ingest on an idle system
+- [x] Worker killed mid-flight (`SIGKILL`) → event reappears after lease expiry, no loss
+- [x] Two workers compete for the same event and exactly one delivers it per lease
+- [x] `delivery_attempts` contains one row per attempt with outcome and duration
+- [x] Destination returning 500 causes a retry; destination returning 400 causes dead-letter
+- [x] 4 workers sustain 10,000 events/min in `tests/load` with no unbounded memory growth
+
+Status: complete on `feat/m2-implementation`, unreleased. Native Windows tests and the full Linux race
+suite passed against PostgreSQL 16 and Redis 7.2. The four-process Compose load run delivered 10,000
+events in 58.84198 s (10,196.80/min), with 10,000 attempts and no duplicates. Container memory samples
+stayed around 8 MiB per worker; the separate four-CPU in-process test also showed a stable heap.
+See [the measured report](benchmarks/m2-delivery.md) and [validation record](testing/m1-m2-validation.md).
+These are finite local runs. The feature branch has not been run on macOS or Windows with `-race` locally;
+the existing CI matrix will verify those platforms when it runs. No release tag is made from this laptop.
 
 **Demo:** a local endpoint that fails twice then succeeds; the attempt list shows three attempts.
 
@@ -708,9 +731,10 @@ A performance claim without a committed report is not a performance claim.
 
 **Metrics** (Prometheus naming, all with `eventrelay_` prefix):
 
+Current M2 metrics are ingest/request counters and histograms, `eventrelay_publish_failures_total`,
+and Go/process collectors on the API's `/metrics`. Delivery metrics below are planned for M6:
+
 ```
-eventrelay_events_ingested_total{result}
-eventrelay_ingest_duration_seconds{quantile}
 eventrelay_events_delivered_total{endpoint,status_class}
 eventrelay_delivery_attempts_total{outcome}
 eventrelay_delivery_duration_seconds{endpoint}
@@ -726,7 +750,7 @@ eventrelay_ratelimit_degraded_total
 **Logs:** JSON, one line per attempt with `event_id`, `attempt`, `outcome`, `status_code`, `duration_ms`.
 Never payload contents at `info`.
 
-**Traces:** `ingest.receive` → `ingest.verify` → `event.persist` → `stream.publish` → `delivery.attempt`,
+**Traces (planned M6):** `ingest.receive` → `ingest.verify` → `event.persist` → `stream.publish` → `delivery.attempt`,
 all carrying `eventrelay.event_id` as a span attribute.
 
 **Alerts** (documented in `deploy/`, not implemented in code):
@@ -742,16 +766,15 @@ DLQ size rising for 15 min · stream lag > 1,000 for 5 min · delivery error rat
 | Replay of a captured request | Timestamp window + optional `Idempotency-Key` |
 | SSRF via endpoint URL | Block link-local, loopback and metadata ranges by default; `EVENTRELAY_ALLOW_PRIVATE_TARGETS=true` to opt out, documented as dangerous |
 | Secret leakage in logs | Secrets never logged; header redaction in the HTTP middleware |
-| Spoofed client IP in logs | The peer address is logged as it arrives; forwarded headers are ignored because the client chooses them |
+| Spoofed client IP in logs | Preserve the peer; only allowlisted proxies may supply X-Forwarded-For for a separate client_ip field |
 | Cross-tenant read | Every query filters by `tenant_id`; leak tests in M5 |
 | Timing attack on signature | `hmac.Equal` only |
 | API key theft | Argon2id at rest, prefix lookup, revocation, `last_used_at` visibility |
-| Response body exfiltration | 1 KiB cap + redaction before storage |
+| Response body exfiltration | Read at most 1 KiB and discard it; no response body is stored |
 | Unbounded resource use | Payload cap, per-tenant rate limit, bounded worker queue |
 | Dependency compromise | `govulncheck` in CI, `go.sum`, pinned base images |
 
-Non-goals for security: no WAF, no IP allowlisting in v1, no trusted-proxy client-IP attribution in
-v1, no mutual TLS to destinations.
+Non-goals for security: no WAF, no IP allowlisting in v1, no mutual TLS to destinations.
 
 ---
 
@@ -811,22 +834,12 @@ events, how to restore from backup.
 
 This section exists because AI assistants and future maintainers routinely describe planned work as done.
 
-**Facts you may rely on:**
+**Facts you may rely on:** ingestion, Redis dispatch and signed HTTP delivery are implemented.
+The M2 worker uses fenced PostgreSQL leases, records attempts, recovers expired leases and retries
+failures every 10 seconds. Full retry policy, replay, tenancy and UI remain future milestones.
 
-- The repository builds and the two binaries print their version.
-- There is no HTTP server, no database connection, no queue connection.
-- Every file in `internal/` and `pkg/` is currently a placeholder directory.
-- `api/openapi.yaml` has an empty `paths:` object and must stay that way until a path is implemented.
-
-**Rules:**
-
-1. Do not write "EventRelay delivers webhooks". It does not. Write "will deliver" or omit it.
-2. Do not add a badge, benchmark or screenshot that was not produced by this repository.
-3. When you implement something, update **all** of: this file's `implemented`/`not_implemented` lists,
-   `README.md` roadmap, and `CHANGELOG.md`. In the same pull request.
-4. Never describe at-least-once as exactly-once. Never write "guaranteed" about delivery ordering.
-5. If you are unsure whether a behaviour exists, `grep` for it. If it is not in the code, it does not exist.
-6. Prefer deleting a stale claim over adding a disclaimer.
+**Rules:** update implemented/not_implemented, README and CHANGELOG together. Never claim
+exactly-once delivery, production readiness, or performance without a recorded run.
 
 **Glossary — use these words, not synonyms:**
 

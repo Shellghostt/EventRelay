@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -15,19 +17,23 @@ import (
 
 // Config is the fully resolved runtime configuration.
 type Config struct {
-	HTTPAddr           string
-	PostgresDSN        string
-	RedisURL           string
-	AdminToken         string
-	MaxPayloadBytes    int64
-	SignatureTolerance time.Duration
-	HTTPTimeout        time.Duration
-	ShutdownTimeout    time.Duration
-	SweepInterval      time.Duration
-	RetentionDays      int
-	MigrateOnStart     bool
-	LogLevel           slog.Level
-	LogFormat          string
+	HTTPAddr            string
+	PostgresDSN         string
+	RedisURL            string
+	AdminToken          string
+	MaxPayloadBytes     int64
+	SignatureTolerance  time.Duration
+	HTTPTimeout         time.Duration
+	ShutdownTimeout     time.Duration
+	SweepInterval       time.Duration
+	RetentionDays       int
+	MigrateOnStart      bool
+	LogLevel            slog.Level
+	LogFormat           string
+	Workers             int
+	LeaseDuration       time.Duration
+	AllowPrivateTargets bool
+	TrustedProxies      []netip.Prefix
 }
 
 // Defaults are the values used when an optional variable is unset.
@@ -58,11 +64,47 @@ func Load(getenv func(string) string) (Config, error) {
 		MigrateOnStart:     true,
 		LogLevel:           slog.LevelInfo,
 		LogFormat:          "json",
+		Workers:            8,
+		LeaseDuration:      60 * time.Second,
 	}
 
 	var problems []error
 	invalid := func(name, value, want string) {
 		problems = append(problems, fmt.Errorf("%s=%q is invalid: expected %s", name, value, want))
+	}
+	if v := getenv("EVENTRELAY_WORKERS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 256 {
+			invalid("EVENTRELAY_WORKERS", v, "an integer between 1 and 256")
+		} else {
+			cfg.Workers = n
+		}
+	}
+	if v := getenv("EVENTRELAY_LEASE_SECONDS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 2 || n > 3600 {
+			invalid("EVENTRELAY_LEASE_SECONDS", v, "an integer between 2 and 3600")
+		} else {
+			cfg.LeaseDuration = time.Duration(n) * time.Second
+		}
+	}
+	if v := getenv("EVENTRELAY_ALLOW_PRIVATE_TARGETS"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			invalid("EVENTRELAY_ALLOW_PRIVATE_TARGETS", v, "a boolean")
+		} else {
+			cfg.AllowPrivateTargets = b
+		}
+	}
+	if v := getenv("EVENTRELAY_TRUSTED_PROXIES"); strings.TrimSpace(v) != "" {
+		for _, raw := range strings.Split(v, ",") {
+			p, err := netip.ParsePrefix(strings.TrimSpace(raw))
+			if err != nil {
+				invalid("EVENTRELAY_TRUSTED_PROXIES", v, "comma separated CIDRs")
+				break
+			}
+			cfg.TrustedProxies = append(cfg.TrustedProxies, p)
+		}
 	}
 
 	if v := getenv("EVENTRELAY_MAX_PAYLOAD_BYTES"); v != "" {
@@ -155,18 +197,31 @@ func Load(getenv func(string) string) (Config, error) {
 		problems = append(problems, errors.New("EVENTRELAY_POSTGRES_DSN is required"))
 	}
 	if cfg.RedisURL == "" {
-		// Redis is required from M2. It is reported here so that a missing
-		// value is a startup warning rather than a runtime surprise.
-		cfg.RedisURL = ""
+		problems = append(problems, errors.New("EVENTRELAY_REDIS_URL is required"))
 	}
 	if len(cfg.AdminToken) < 16 {
 		problems = append(problems, errors.New("EVENTRELAY_ADMIN_TOKEN is required and must be at least 16 characters"))
 	}
 
+	if cfg.HTTPTimeout >= cfg.LeaseDuration {
+		problems = append(problems, errors.New("EVENTRELAY_HTTP_TIMEOUT_SECONDS must be less than EVENTRELAY_LEASE_SECONDS"))
+	}
 	if len(problems) > 0 {
 		return Config{}, errors.Join(problems...)
 	}
 	return cfg, nil
+}
+
+// LoadWorker shares validation but requires no management credential.
+func LoadWorker(getenv func(string) string) (Config, error) {
+	cfg, err := Load(func(key string) string {
+		if key == "EVENTRELAY_ADMIN_TOKEN" {
+			return "worker-no-management"
+		}
+		return getenv(key)
+	})
+	cfg.AdminToken = ""
+	return cfg, err
 }
 
 // Redacted returns the configuration safe to log.
@@ -191,21 +246,15 @@ func valueOr(getenv func(string) string, key, fallback string) string {
 	return fallback
 }
 
-// redactDSN keeps the host and database, which are useful in a log line, and
-// removes the password entirely.
+// redactDSN keeps only scheme and host. Usernames, paths and query parameters
+// can all contain credentials and are omitted.
 func redactDSN(dsn string) string {
 	if dsn == "" {
 		return ""
 	}
-	at := strings.LastIndex(dsn, "@")
-	schemeEnd := strings.Index(dsn, "://")
-	if at < 0 || schemeEnd < 0 || at < schemeEnd {
+	u, err := url.Parse(dsn)
+	if err != nil || u.Host == "" || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
 		return "postgres://<redacted>"
 	}
-	creds := dsn[schemeEnd+3 : at]
-	user := creds
-	if colon := strings.Index(creds, ":"); colon >= 0 {
-		user = creds[:colon]
-	}
-	return dsn[:schemeEnd+3] + user + ":***" + dsn[at:]
+	return u.Scheme + "://" + u.Host + "/<redacted>"
 }

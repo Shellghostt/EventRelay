@@ -91,7 +91,7 @@ func TestEndpointAndEventRoundTrip(t *testing.T) {
 		t.Fatalf("ingest secret did not round trip")
 	}
 
-	events, next, err := s.ListEvents(ctx, tenantID, store.EventFilter{Limit: 10})
+	events, next, err := s.ListEvents(ctx, tenantID, store.EventFilter{Limit: 10, EndpointID: &endpoint.ID})
 	if err != nil {
 		t.Fatalf("list events: %v", err)
 	}
