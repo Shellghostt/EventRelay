@@ -42,6 +42,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Integration CI uses Docker-assigned PostgreSQL/Redis host ports and waits for PostgreSQL TCP
+  readiness, avoiding runner port conflicts before the delivery tests can start.
 - M1 signed JSON null rejection, DSN query/username credential redaction, repeatable integration queries,
   Compose build context and base64-to-hex signing instructions. Migrations serialize concurrent startup.
 - Completion checks lease expiry after acquiring the row lock, so lock contention cannot permit a stale

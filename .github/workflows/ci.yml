@@ -51,6 +51,7 @@ jobs:
   integration:
     name: Integration tests (PostgreSQL and Redis)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     services:
       postgres:
         image: postgres:16-alpine
@@ -59,24 +60,21 @@ jobs:
           POSTGRES_PASSWORD: eventrelay
           POSTGRES_DB: eventrelay
         ports:
-          - 55432:5432
+          - 5432/tcp
         options: >-
-          --health-cmd "pg_isready -U eventrelay -d eventrelay"
+          --health-cmd "pg_isready -h 127.0.0.1 -U eventrelay -d eventrelay"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
       redis:
         image: redis:7.2-alpine
         ports:
-          - 6379:6379
+          - 6379/tcp
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-    env:
-      EVENTRELAY_TEST_REDIS_URL: redis://localhost:6379/0
-      EVENTRELAY_TEST_DATABASE_URL: postgres://eventrelay:eventrelay@localhost:55432/eventrelay?sslmode=disable
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -84,7 +82,10 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Store and delivery integration tests
-        run: go test -race -count=1 -timeout 120s ./internal/store ./tests/integration
+        env:
+          EVENTRELAY_TEST_REDIS_URL: redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}/0
+          EVENTRELAY_TEST_DATABASE_URL: postgres://eventrelay:eventrelay@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/eventrelay?sslmode=disable
+        run: go test -race -count=1 -timeout 120s -v ./internal/store ./tests/integration
 
   lint:
     name: Lint

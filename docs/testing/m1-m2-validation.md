@@ -49,8 +49,25 @@ each outbound request. Attempt history remains a SQL query until M4.
 
 Reproduction commands are in [deploy/README.md](../../deploy/README.md). CI covers unit/race tests on
 Windows, Ubuntu and macOS plus real PostgreSQL/Redis integration on Ubuntu. Feature/fix branches now
-trigger CI as well as pull requests and main. The updated feature branch has not been submitted to GitHub
-CI during this local session; macOS execution and native Windows race execution remain CI checks.
+trigger CI as well as pull requests and main.
+
+## CI recheck — 2026-11-14
+
+The [initial M2 CI run](https://github.com/Shellghostt/EventRelay/actions/runs/43533644607) passed
+build/race tests on Windows, Ubuntu and macOS, lint and the vulnerability scan. Its integration job
+failed before checkout: PostgreSQL's fixed host port 55432 was already occupied on the runner.
+
+The integration workflow now lets Docker assign free host ports for both services, passes those ports
+to the test URLs, and checks PostgreSQL's final TCP listener rather than its temporary startup socket.
+Verbose integration output records the tests executed; the job is bounded to ten minutes.
+
+Local revalidation with disposable PostgreSQL 16 and Redis 7.2 on dynamically assigned ports passed
+the native Windows full suite, full Linux race suite, `go vet`, golangci-lint 2.15.0 and actionlint 1.7.12.
+The Linux race suite exercised ingest/delivery, retries, exclusive leases, killed-worker recovery,
+Redis loss, outage recovery, terminal attempts, rollback and tenant isolation. The opt-in load tests
+were not rerun; their original results remain in the benchmark report above. Native Windows race
+revalidation was unavailable because the installed MinGW compiler only supports 32-bit mode; the
+initial remote Windows race job passed. No application data was used by these disposable services.
 
 ## Scope and limits
 
