@@ -6,6 +6,7 @@ import (
 	"github.com/shellghostt/eventrelay/internal/api"
 	"github.com/shellghostt/eventrelay/internal/config"
 	"github.com/shellghostt/eventrelay/internal/delivery"
+	"github.com/shellghostt/eventrelay/internal/retry"
 	"github.com/shellghostt/eventrelay/internal/store"
 	"github.com/shellghostt/eventrelay/internal/stream"
 	"github.com/shellghostt/eventrelay/internal/worker"
@@ -100,17 +101,19 @@ func TestExclusiveLeaseAndStaleCompletion(t *testing.T) {
 	}
 	old := <-leases
 	time.Sleep(100 * time.Millisecond)
-	if _, err := h.Store.RecoverExpired(ctx, e.TenantID); err != nil {
+	// The replacement claim follows immediately, so recovery reschedules the
+	// event as due now rather than under the production policy.
+	if _, err := h.Store.RecoverExpired(ctx, e.TenantID, func(int) time.Time { return time.Now() }); err != nil {
 		t.Fatal(err)
 	}
 	fresh, err := h.Store.Claim(ctx, e.TenantID, e.ID, "replacement", time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = h.Store.Finish(ctx, old, store.AttemptResult{Outcome: "success"}, time.Second); !errors.Is(err, store.ErrLeaseLost) {
+	if err = h.Store.Finish(ctx, old, store.AttemptResult{Outcome: "success"}, retry.Decision{}); !errors.Is(err, store.ErrLeaseLost) {
 		t.Fatalf("stale completion: %v", err)
 	}
-	if err = h.Store.Finish(ctx, fresh, store.AttemptResult{Outcome: "success"}, time.Second); err != nil {
+	if err = h.Store.Finish(ctx, fresh, store.AttemptResult{Outcome: "success"}, retry.Decision{}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -149,7 +152,7 @@ func TestCompletionWaitingForRowLockRejectsExpiredLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- h.Store.Finish(ctx, lease, store.AttemptResult{Outcome: "success"}, time.Second) }()
+	go func() { done <- h.Store.Finish(ctx, lease, store.AttemptResult{Outcome: "success"}, retry.Decision{}) }()
 	// Prove Finish began before releasing the row lock, rather than relying on
 	// goroutine scheduling. PostgreSQL's now() remains that transaction's start.
 	for {

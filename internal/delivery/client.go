@@ -120,6 +120,10 @@ func (c *Client) Deliver(ctx context.Context, l store.Lease) (result store.Attem
 	defer func() { _ = resp.Body.Close() }()
 	result.Outcome = Classify(resp.StatusCode)
 	result.Status = resp.StatusCode
+	if result.Outcome == "retryable" {
+		// Parsed by the retry policy; never persisted or logged raw (ADR 0005).
+		result.RetryAfter = resp.Header.Get("Retry-After")
+	}
 	// Read at most 1 KiB. Response content is deliberately omitted from storage:
 	// an arbitrary body cannot be reliably redacted by a credential regex.
 	_, err = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))

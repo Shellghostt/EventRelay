@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/shellghostt/eventrelay/internal/retry"
 )
 
 // Lease fences completion by an unguessable token and attempt number.
@@ -69,10 +70,34 @@ type AttemptResult struct {
 	Status   int
 	Error    string
 	Duration time.Duration
+	// RetryAfter is the raw Retry-After header of a retryable response. The
+	// caller parses it and never persists or logs the raw value.
+	RetryAfter string
 }
 
-// Finish commits the attempt and event transition together. Stale workers cannot write.
-func (s *Store) Finish(ctx context.Context, lease Lease, result AttemptResult, retryDelay time.Duration) error {
+// Finish commits the attempt and event transition together. Stale workers
+// cannot write. The caller computes the retry decision under its own policy
+// and clock; this persists it exactly once inside the fences, so duplicate
+// completions and sweeps can neither redraw jitter nor extend a scheduled
+// retry (ADR 0005).
+func (s *Store) Finish(ctx context.Context, lease Lease, result AttemptResult, decision retry.Decision) error {
+	if result.Outcome == "success" && decision.Terminal {
+		return errors.New("store: success outcome marked terminal")
+	}
+	if result.Outcome != "success" && !decision.Terminal && decision.NextAttempt.IsZero() {
+		return errors.New("store: retry decision without a next attempt time")
+	}
+	if decision.Terminal && decision.Reason == "" {
+		return errors.New("store: terminal decision without a reason")
+	}
+	errorText := result.Error
+	if decision.Diagnostic != "" {
+		if errorText == "" {
+			errorText = decision.Diagnostic
+		} else {
+			errorText = errorText + "; " + decision.Diagnostic
+		}
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -101,21 +126,22 @@ func (s *Store) Finish(ctx context.Context, lease Lease, result AttemptResult, r
 	status := StatusPending
 	if result.Outcome == "success" {
 		status = StatusDelivered
-	} else if result.Outcome == "non_retryable" || e.AttemptCount >= lease.Endpoint.MaxAttempts {
+	} else if decision.Terminal {
 		status = StatusDeadLettered
 	}
-	_, err = tx.Exec(ctx, `UPDATE delivery_attempts SET finished_at=now(),outcome=$3,response_status=NULLIF($4,0),error=NULLIF($5,''),duration_ms=$6 WHERE event_id=$1::uuid AND attempt_no=$2`, e.ID.String(), e.AttemptCount, result.Outcome, result.Status, result.Error, result.Duration.Milliseconds())
+	_, err = tx.Exec(ctx, `UPDATE delivery_attempts SET finished_at=now(),outcome=$3,response_status=NULLIF($4,0),error=NULLIF($5,''),duration_ms=$6 WHERE event_id=$1::uuid AND attempt_no=$2`, e.ID.String(), e.AttemptCount, result.Outcome, result.Status, errorText, result.Duration.Milliseconds())
 	if err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `UPDATE events SET status=$3,leased_by=NULL,lease_expires_at=NULL,last_error=NULLIF($4,''),
-		next_attempt_at=now()+$5::interval,dispatch_after=now(),delivered_at=CASE WHEN $3='delivered' THEN now() ELSE NULL END
-		WHERE tenant_id=$1::uuid AND id=$2::uuid`, e.TenantID.String(), e.ID.String(), status, result.Error, fmt.Sprintf("%f seconds", retryDelay.Seconds()))
+		next_attempt_at=CASE WHEN $3='pending' THEN $5::timestamptz ELSE now() END,
+		dispatch_after=now(),delivered_at=CASE WHEN $3='delivered' THEN now() ELSE NULL END
+		WHERE tenant_id=$1::uuid AND id=$2::uuid`, e.TenantID.String(), e.ID.String(), status, errorText, decision.NextAttempt)
 	if err != nil {
 		return err
 	}
 	if status == StatusDeadLettered {
-		_, err = tx.Exec(ctx, `INSERT INTO dead_letters(event_id,reason,last_error) VALUES($1::uuid,$2,NULLIF($3,'')) ON CONFLICT(event_id) DO UPDATE SET reason=excluded.reason,last_error=excluded.last_error,moved_at=now()`, e.ID.String(), result.Outcome, result.Error)
+		_, err = tx.Exec(ctx, `INSERT INTO dead_letters(event_id,reason,last_error) VALUES($1::uuid,$2,NULLIF($3,'')) ON CONFLICT(event_id) DO UPDATE SET reason=excluded.reason,last_error=excluded.last_error,moved_at=now()`, e.ID.String(), decision.Reason, errorText)
 		if err != nil {
 			return err
 		}
@@ -156,8 +182,16 @@ func (s *Store) Due(ctx context.Context, tenant uuid.UUID, limit int, interval t
 	return out, rows.Err()
 }
 
-// RecoverExpired closes incomplete attempts and makes their events eligible again.
-func (s *Store) RecoverExpired(ctx context.Context, tenant uuid.UUID) (int64, error) {
+// RecoverExpired closes incomplete attempts and makes their events eligible
+// again. An expired lease consumes its already claimed attempt: the attempt
+// closes once as lease_expired, the same attempt budget applies, and no extra
+// uncounted HTTP attempt is created. The caller supplies the schedule for the
+// next attempt; it is consulted at most once per recovered row inside the same
+// transaction, so concurrent sweepers cannot redraw it (ADR 0005).
+func (s *Store) RecoverExpired(ctx context.Context, tenant uuid.UUID, next func(failedAttempt int) time.Time) (int64, error) {
+	if next == nil {
+		return 0, errors.New("store: recovery schedule is required")
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, err
@@ -192,15 +226,23 @@ func (s *Store) RecoverExpired(ctx context.Context, tenant uuid.UUID) (int64, er
 			return 0, err
 		}
 		status := StatusPending
+		nextAttempt := time.Time{}
 		if x.attempt >= x.max {
 			status = StatusDeadLettered
+		} else {
+			nextAttempt = next(x.attempt)
+			if nextAttempt.IsZero() {
+				return 0, fmt.Errorf("store: recovery schedule returned no time for attempt %d", x.attempt)
+			}
 		}
-		_, err = tx.Exec(ctx, `UPDATE events SET status=$3,leased_by=NULL,lease_expires_at=NULL,next_attempt_at=now(),dispatch_after=now(),last_error='worker lease expired' WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenant.String(), x.id, status)
+		_, err = tx.Exec(ctx, `UPDATE events SET status=$3,leased_by=NULL,lease_expires_at=NULL,
+			next_attempt_at=CASE WHEN $3='pending' THEN $4::timestamptz ELSE now() END,
+			dispatch_after=now(),last_error='worker lease expired' WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenant.String(), x.id, status, nextAttempt)
 		if err != nil {
 			return 0, err
 		}
 		if status == StatusDeadLettered {
-			_, err = tx.Exec(ctx, `INSERT INTO dead_letters(event_id,reason) VALUES($1::uuid,'attempts_exhausted') ON CONFLICT(event_id) DO NOTHING`, x.id)
+			_, err = tx.Exec(ctx, `INSERT INTO dead_letters(event_id,reason) VALUES($1::uuid,$2) ON CONFLICT(event_id) DO NOTHING`, x.id, retry.ReasonAttemptsExhausted)
 			if err != nil {
 				return 0, err
 			}

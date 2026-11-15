@@ -8,8 +8,11 @@ import (
 	"sync"
 	"time"
 
+	"math/rand/v2"
+
 	"github.com/google/uuid"
 	"github.com/shellghostt/eventrelay/internal/delivery"
+	"github.com/shellghostt/eventrelay/internal/retry"
 	"github.com/shellghostt/eventrelay/internal/store"
 	"github.com/shellghostt/eventrelay/internal/stream"
 )
@@ -22,7 +25,13 @@ type Worker struct {
 	Concurrency   int
 	LeaseDuration time.Duration
 	SweepInterval time.Duration
-	RetryDelay    time.Duration
+	// Policy schedules retries and recovery waits. retry.Default applies when
+	// its schedule is unset; a shorter injected schedule is for tests only
+	// (ADR 0005).
+	Policy retry.Policy
+	// RandFloat64 returns uniform [0,1) samples and must be safe for
+	// concurrent use. The math/rand/v2 global source applies when nil.
+	RandFloat64 func() float64
 }
 
 func (w *Worker) Run(ctx context.Context) error {
@@ -32,8 +41,11 @@ func (w *Worker) Run(ctx context.Context) error {
 	if w.Log == nil {
 		w.Log = slog.Default()
 	}
-	if w.RetryDelay <= 0 {
-		w.RetryDelay = 10 * time.Second
+	if w.Policy.Waits == nil {
+		w.Policy = retry.Default
+	}
+	if w.RandFloat64 == nil {
+		w.RandFloat64 = rand.Float64
 	}
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -94,8 +106,26 @@ func (w *Worker) consume(ctx context.Context, id string) {
 			// Once leased, crash recovery is durable; no Redis pending entry is needed.
 			_ = w.Stream.Ack(ctx, m.ID)
 			result := w.Client.Deliver(ctx, lease)
+			// The completion time drives schedule math; the resulting absolute
+			// next attempt time is persisted once inside the fenced write.
+			var decision retry.Decision
+			if result.Outcome != "success" {
+				d, err := w.Policy.Decide(retry.Input{
+					Outcome:       result.Outcome,
+					StatusCode:    result.Status,
+					RetryAfter:    result.RetryAfter,
+					FailedAttempt: int(lease.Event.AttemptCount),
+					MaxAttempts:   int(lease.Endpoint.MaxAttempts),
+					CompletedAt:   time.Now(),
+				}, w.RandFloat64)
+				if err != nil {
+					w.Log.Error("retry scheduling failed; lease recovery will retry", "event_id", event, "error", err)
+					continue
+				}
+				decision = d
+			}
 			finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			err = w.Store.Finish(finishCtx, lease, result, w.RetryDelay)
+			err = w.Store.Finish(finishCtx, lease, result, decision)
 			finishCancel()
 			if err != nil {
 				w.Log.Warn("attempt completion not committed; lease recovery will retry", "event_id", event)
@@ -118,11 +148,22 @@ func (w *Worker) sweepLoop(ctx context.Context) {
 	}
 }
 
+// recoveryNext schedules the attempt after an interrupted one under the worker
+// policy. No Retry-After exists: the attempt never produced a response.
+func (w *Worker) recoveryNext(failedAttempt int) time.Time {
+	wait, ok := w.Policy.Wait(failedAttempt, w.RandFloat64)
+	if !ok {
+		w.Log.Warn("no schedule entry for interrupted attempt; retrying immediately", "attempt", failedAttempt)
+		return time.Now()
+	}
+	return time.Now().Add(wait)
+}
+
 func (w *Worker) Sweep(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	tenant := uuid.MustParse(store.DefaultTenantID)
-	if _, err := w.Store.RecoverExpired(ctx, tenant); err != nil {
+	if _, err := w.Store.RecoverExpired(ctx, tenant, w.recoveryNext); err != nil {
 		return err
 	}
 	if err := w.Stream.Ensure(ctx); err != nil {
