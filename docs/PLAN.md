@@ -443,7 +443,8 @@ Base delays, indexed by failed attempt number:
 - `max_attempts` is per endpoint, default 8, hard ceiling 20.
 - Check exhaustion before scheduling. Attempts 8–19 reuse the 24 h entry only when another attempt is allowed.
 - Default seven nominal waits total 31,360 s (8h42m40s), excluding jitter, Retry-After and request/dispatch time.
-  See [M3 requirements](phases/M3.md) for scheduling, atomicity and interrupted-attempt decisions.
+  See [M3 requirements](phases/M3.md) for scheduling, atomicity and interrupted-attempt decisions and
+  [ADR 0005](adr/0005-m3-retry-policy.md) for the recorded policy.
 
 ### 9.3 Outcome classification
 
