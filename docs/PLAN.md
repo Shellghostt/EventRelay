@@ -25,11 +25,11 @@ updated: 2026-11-14
 
 ## 0. Machine context
 
-M2 is complete and merged into `main`; M3 is **Not started**. The
-[M3 requirements](phases/M3.md) clarify this plan's next phase and its acceptance gates.
-Resolve the listed ADR decisions before dependent implementation. The
+M2 is complete and merged into `main`. M3 (retry policy and dead-letter handling) is implemented on
+`feat/m3-implementation` with recorded acceptance evidence; it is not merged and CI has not run on it.
+The [M3 requirements](phases/M3.md) define the phase and its acceptance gates.
+[ADR 0005](adr/0005-m3-retry-policy.md) records the policy decisions the implementation follows. The
 [development-tool audit](DEVELOPMENT-TOOLS.md) records actual coverage and profiling limits.
-This preparation changes documentation only; it does not establish any M3 behavior or release.
 
 Read this block first. It is the fastest way to know what is true about this repository right now.
 
@@ -43,7 +43,7 @@ functional: partial              # ingestion and M2 delivery work; M3-M6 remain
 implemented:
   - Redis Streams dispatch with durable PostgreSQL republication
   - bounded signed HTTP workers, fenced leases, crash recovery and recorded attempts
-  - fixed 10 s retries and terminal dead-letter records (full policy is M3)
+  - exponential retry schedule with jitter, Retry-After support and stable terminal reasons (ER-017–ER-020, ADR 0005)
   - destination IP protection and explicit trusted-proxy attribution
   - environment configuration with validation and redacted logging
   - structured logging and prometheus metrics on /metrics
@@ -57,8 +57,6 @@ implemented:
   - integration tests for the store, gated on EVENTRELAY_TEST_DATABASE_URL
 
 not_implemented:
-  - exponential retry scheduler with jitter and Retry-After
-  - full retry/backoff policy and DLQ management
   - replay
   - delivery history and attempt endpoints
   - endpoint get, update, enable/disable and delete
@@ -421,8 +419,9 @@ Outbound requests add `X-EventRelay-Event-Id`, `X-EventRelay-Attempt`, and `User
 
 ### 9.2 Retry schedule
 
-The following full policy is planned for M3. M2 uses a fixed 10-second delay and already enforces
-`max_attempts`, non-retryable failures, terminal dead letters and endpoint disabling on HTTP 410.
+The full policy below is implemented on `feat/m3-implementation` per [ADR 0005](adr/0005-m3-retry-policy.md),
+replacing the M2 fixed 10-second delay. It preserves M2's enforcement of `max_attempts`, non-retryable
+failures, terminal dead letters and endpoint disabling on HTTP 410.
 
 Base delays, indexed by failed attempt number:
 
@@ -616,17 +615,21 @@ passed for the merged baseline. Local runs and remote CI are distinct evidence; 
 **Deliverable:** the documented backoff schedule, `Retry-After` support, DLQ with reason, sweeper for due
 events and expired leases.
 
-Status: **Not started**. Follow [M3 requirements](phases/M3.md), preserving the existing M2 recovery path.
+Status: implemented on `feat/m3-implementation`; acceptance evidence in the
+[M3 validation record](testing/m3-retry-policy.md). Not merged into `main`; CI has not run on the branch.
 
 **Acceptance criteria**
 
-- [ ] Backoff matches the table ±20% jitter, verified by a unit test with a fake clock
-- [ ] `Retry-After: 3600` after failure 1 delays at least one hour; a longer jittered policy wait wins
-- [ ] Attempt 8 failure moves the event to `dead_letters` with a reason
-- [ ] Concurrent/repeated sweepers preserve one attempt per lease and one persisted retry time
-- [ ] Non-retryable 4xx skips remaining attempts
-- [ ] Interrupted final attempts, malformed/date headers, restart and Redis-loss cases pass
-- [ ] M2 database upgrade preserves events, attempts and dead letters
+- [x] Backoff matches the table ±20% jitter, verified by a unit test with a fake clock
+- [x] `Retry-After: 3600` after failure 1 delays at least one hour; a longer jittered policy wait wins
+- [x] Attempt 8 failure moves the event to `dead_letters` with a reason
+- [x] Concurrent/repeated sweepers preserve one attempt per lease and one persisted retry time
+- [x] Non-retryable 4xx skips remaining attempts
+- [x] Interrupted final attempts, malformed/date headers, restart and Redis-loss cases pass
+- [x] M2 database upgrade preserves events, attempts and dead letters
+
+All seven criteria were verified locally against real PostgreSQL 16 and Redis 7.2; the exact commands,
+outputs and the recorded native-Windows race skip are in the validation record.
 
 **Demo:** inject a short test schedule to watch exhaustion and dead-letter promotion. Production schedule
 overrides require documented configuration and an ADR before implementation.

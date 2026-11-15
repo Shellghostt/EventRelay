@@ -10,7 +10,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Added
 
 - [M3 requirements](docs/phases/M3.md) with phase boundaries, failure cases, ADR prerequisites and
-  acceptance gates, plus a [development-tool audit](docs/DEVELOPMENT-TOOLS.md). M3 is not implemented.
+  acceptance gates, plus a [development-tool audit](docs/DEVELOPMENT-TOOLS.md).
+- M3 retry policy and dead-letter handling (ER-017–ER-020, [ADR 0005](docs/adr/0005-m3-retry-policy.md)):
+  the documented backoff schedule with a repeated 24-hour entry for attempts 8–19 and exhaustion checked
+  before scheduling, uniform 0.8–1.2 jitter with an injectable random source, `Retry-After` seconds and
+  HTTP-date parsing with a 24-hour cap and bounded diagnostics for unusable values, stable terminal
+  reasons (`attempts_exhausted`, `non_retryable_response`, `non_retryable_policy`), expired-lease
+  recovery that consumes its attempt and schedules under the same policy, and migration 0003
+  normalizing M2 reason values under a CHECK constraint.
 
 - M2 Redis transport, signed HTTP workers, exclusive fenced leases, attempt recording, crash recovery,
   fixed-delay retries, terminal dead-letter records, private-destination protection and worker scaling.
@@ -51,10 +58,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   Compose build context and base64-to-hex signing instructions. Migrations serialize concurrent startup.
 - Completion checks lease expiry after acquiring the row lock, so lock contention cannot permit a stale
   success. Truncated non-retryable HTTP responses retain their terminal classification.
+- The delivery classification test sleeps briefly in its handler: a sub-millisecond local round trip
+  floors the measured duration to zero under the ~0.5 ms Windows clock granularity.
 
 ### Planned
 
-- M3: exponential backoff, jitter, Retry-After and full dead-letter queue policy.
+- M4: inspection and replay APIs, attempt history and the React dashboard.
 
 ## [0.1.0] - 2026-11-13
 
