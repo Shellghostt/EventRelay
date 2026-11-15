@@ -9,6 +9,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- [M3 requirements](docs/phases/M3.md) with phase boundaries, failure cases, ADR prerequisites and
+  acceptance gates, plus a [development-tool audit](docs/DEVELOPMENT-TOOLS.md). M3 is not implemented.
+
 - M2 Redis transport, signed HTTP workers, exclusive fenced leases, attempt recording, crash recovery,
   fixed-delay retries, terminal dead-letter records, private-destination protection and worker scaling.
 - Explicit trusted-proxy CIDRs with right-to-left X-Forwarded-For validation (ER-037).

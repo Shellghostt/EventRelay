@@ -13,7 +13,7 @@ depends_on:
   - Redis 7.2
   - Docker (development only)
 created: 2026-11-13
-updated: 2026-11-13
+updated: 2026-11-14
 ---
 
 # EventRelay — Implementation Plan
@@ -24,6 +24,12 @@ updated: 2026-11-13
 ---
 
 ## 0. Machine context
+
+M2 is complete and merged into `main`; M3 is **Not started**. The
+[M3 requirements](phases/M3.md) clarify this plan's next phase and its acceptance gates.
+Resolve the listed ADR decisions before dependent implementation. The
+[development-tool audit](DEVELOPMENT-TOOLS.md) records actual coverage and profiling limits.
+This preparation changes documentation only; it does not establish any M3 behavior or release.
 
 Read this block first. It is the fastest way to know what is true about this repository right now.
 
@@ -137,8 +143,8 @@ These are decisions, not omissions. Do not implement them without superseding th
 
 ### v0.1 — MVP (M1–M3)
 
-One tenant, multiple endpoints, signed ingestion, durable storage, retries, dead-letter queue, manual
-replay via API. No dashboard, no rate limits, no ordering.
+One tenant, multiple endpoints, signed ingestion, durable storage, retries and dead-letter records.
+Inspection and manual replay APIs belong to M4. No dashboard, no rate limits, no ordering in M1–M3.
 
 ### v1.0 — public release (M4–M6)
 
@@ -432,9 +438,12 @@ Base delays, indexed by failed attempt number:
 | 8 | 24 h |
 
 - Jitter: `delay * random(0.8, 1.2)`.
-- `Retry-After` (seconds or HTTP date) overrides the base delay when it is **larger**, capped at 24 h.
+- `Retry-After` (seconds or HTTP date) supplies a minimum wait capped at 24 h; use the larger of that
+  wait and the jittered schedule. Invalid/past/overflow values fall back to the schedule.
 - `max_attempts` is per endpoint, default 8, hard ceiling 20.
-- Default total retry window ≈ 39 h for 8 attempts.
+- Check exhaustion before scheduling. Attempts 8–19 reuse the 24 h entry only when another attempt is allowed.
+- Default seven nominal waits total 31,360 s (8h42m40s), excluding jitter, Retry-After and request/dispatch time.
+  See [M3 requirements](phases/M3.md) for scheduling, atomicity and interrupted-attempt decisions.
 
 ### 9.3 Outcome classification
 
@@ -591,13 +600,13 @@ records attempts. Horizontal scaling via `docker compose up --scale worker=4`.
 - [x] Destination returning 500 causes a retry; destination returning 400 causes dead-letter
 - [x] 4 workers sustain 10,000 events/min in `tests/load` with no unbounded memory growth
 
-Status: complete on `feat/m2-implementation`, unreleased. Native Windows tests and the full Linux race
+Status: complete and merged into `main`. Native Windows tests and the full Linux race
 suite passed against PostgreSQL 16 and Redis 7.2. The four-process Compose load run delivered 10,000
 events in 58.84198 s (10,196.80/min), with 10,000 attempts and no duplicates. Container memory samples
 stayed around 8 MiB per worker; the separate four-CPU in-process test also showed a stable heap.
 See [the measured report](benchmarks/m2-delivery.md) and [validation record](testing/m1-m2-validation.md).
-These are finite local runs. The feature branch has not been run on macOS or Windows with `-race` locally;
-the existing CI matrix will verify those platforms when it runs. No release tag is made from this laptop.
+These are finite local runs. Main CI [43553657179](https://github.com/shellghostt/eventrelay/actions/runs/43553657179)
+passed for the merged baseline. Local runs and remote CI are distinct evidence; no M3 checks are claimed.
 
 **Demo:** a local endpoint that fails twice then succeeds; the attempt list shows three attempts.
 
@@ -606,15 +615,20 @@ the existing CI matrix will verify those platforms when it runs. No release tag 
 **Deliverable:** the documented backoff schedule, `Retry-After` support, DLQ with reason, sweeper for due
 events and expired leases.
 
+Status: **Not started**. Follow [M3 requirements](phases/M3.md), preserving the existing M2 recovery path.
+
 **Acceptance criteria**
 
 - [ ] Backoff matches the table ±20% jitter, verified by a unit test with a fake clock
-- [ ] `Retry-After: 3600` delays the next attempt by one hour
+- [ ] `Retry-After: 3600` after failure 1 delays at least one hour; a longer jittered policy wait wins
 - [ ] Attempt 8 failure moves the event to `dead_letters` with a reason
-- [ ] Sweeper is idempotent: running it twice does not double-schedule
+- [ ] Concurrent/repeated sweepers preserve one attempt per lease and one persisted retry time
 - [ ] Non-retryable 4xx skips remaining attempts
+- [ ] Interrupted final attempts, malformed/date headers, restart and Redis-loss cases pass
+- [ ] M2 database upgrade preserves events, attempts and dead letters
 
-**Demo:** `EVENTRELAY_` override of the schedule to seconds, watch an event exhaust and land in DLQ.
+**Demo:** inject a short test schedule to watch exhaustion and dead-letter promotion. Production schedule
+overrides require documented configuration and an ADR before implementation.
 
 ### M4 — Inspection, replay and dashboard
 

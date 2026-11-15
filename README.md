@@ -6,7 +6,7 @@
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 ![Go](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)
 
-**Status: M2 (unreleased).** Signed events are stored durably and dispatched through Redis Streams to
+**Status: M2 complete and merged into main.** Signed events are stored durably and dispatched through Redis Streams to
 independently scaled HTTP workers. Delivery is at least once: destinations must deduplicate by event ID.
 M2 uses a fixed 10-second retry delay and caps attempts; the full backoff and Retry-After policy is M3.
 
@@ -24,15 +24,15 @@ can read end to end does not really exist as a mature open-source project. Event
 | Multi-tenant webhook endpoints | M5 | Not started |
 | Event ingestion and persistence | M1 | **Done** |
 | HMAC signature verification | M1 | **Done** |
-| Asynchronous delivery workers | M2 | **Done (unreleased)** |
+| Asynchronous delivery workers | M2 | **Done (merged)** |
 | Configurable retry policies | M3 | Not started |
-| Dead-letter queue | M3 | Not started |
+| Full dead-letter policy and terminal reasons | M3 | Not started (M2 has basic terminal records) |
 | Request inspection and delivery history | M4 | Not started |
 | Manual event replay | M4 | Not started |
 | API key management | M5 | Not started |
 | OpenAPI documentation | M1 | **Done** (implemented paths only) |
 | Per-tenant rate limits | M5 | Not started |
-| Horizontal worker scaling | M2 | **Done (unreleased)** |
+| Horizontal worker scaling | M2 | **Done (merged)** |
 | Idempotency keys | M5 | Not started (header accepted, ignored) |
 | Event ordering options | M6 | Not started |
 | Distributed tracing | M6 | Not started |
@@ -148,10 +148,13 @@ See [validation and limits](docs/testing/m1-m2-validation.md) before interpretin
 
 ## Roadmap
 
+M3 is **Not started**. Read the [M3 requirements and acceptance gates](docs/phases/M3.md)
+before implementation and the [development-tool audit](docs/DEVELOPMENT-TOOLS.md) before debugging.
+
 | Milestone | Deliverable | Status |
 |---|---|---|
 | M1 | HTTP ingestion API and durable event storage | **Done** (v0.1.0) |
-| M2 | Redis Streams transport, worker pool, horizontal scaling | **Done (unreleased)** |
+| M2 | Redis Streams transport, worker pool, horizontal scaling | **Done (merged)** |
 | M3 | Retry scheduler and dead-letter queue | Not started |
 | M4 | Dashboard, request inspection and manual replay | Not started |
 | M5 | Multi-tenancy, API keys, rate limits, idempotency | Not started |

@@ -1,6 +1,6 @@
 # EventRelay Architecture
 
-**Status: partially implemented (M2).** Ingestion, Redis transport and HTTP delivery exist.
+**Status: M2 complete and merged into main.** Ingestion, Redis transport and HTTP delivery exist.
 Full retry policy, replay, tenancy and the dashboard remain planned. See [ADR 0004](adr/0004-m2-delivery.md).
 
 ## Context
@@ -58,3 +58,8 @@ retries, not the M3 exponential policy. Tests and measured limits are recorded i
 
 See [PLAN.md](PLAN.md) section 4 (non-goals). If a component is not on that diagram, it is not part of the
 design.
+
+## M3 preparation
+
+M3 is **Not started**. Read [phase requirements](phases/M3.md) for planned contracts,
+ADR decisions and acceptance gates, and [development tools](DEVELOPMENT-TOOLS.md) for actual coverage.
