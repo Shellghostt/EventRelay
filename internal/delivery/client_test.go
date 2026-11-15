@@ -26,6 +26,10 @@ func TestDeliverySignsAndClassifies(t *testing.T) {
 				if r.Header.Get("X-EventRelay-Attempt") != "2" || r.Header.Get("X-EventRelay-Event-Id") == "" {
 					t.Error("missing delivery metadata")
 				}
+				// A local round trip can complete within one Windows clock tick
+				// (~0.5 ms), which would floor Duration to zero; sleep so the
+				// measured duration is reliably positive.
+				time.Sleep(5 * time.Millisecond)
 				w.Header().Set("Location", "/redirect")
 				w.WriteHeader(status)
 			}))
