@@ -38,15 +38,6 @@ func (w *Worker) Run(ctx context.Context) error {
 	if w.Concurrency < 1 || w.LeaseDuration <= 0 || w.SweepInterval <= 0 {
 		return errors.New("invalid worker configuration")
 	}
-	if w.Log == nil {
-		w.Log = slog.Default()
-	}
-	if w.Policy.Waits == nil {
-		w.Policy = retry.Default
-	}
-	if w.RandFloat64 == nil {
-		w.RandFloat64 = rand.Float64
-	}
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() { defer wg.Done(); w.sweepLoop(ctx) }()
@@ -56,6 +47,27 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 	wg.Wait()
 	return nil
+}
+
+func (w *Worker) logger() *slog.Logger {
+	if w.Log != nil {
+		return w.Log
+	}
+	return slog.Default()
+}
+
+// Resolve defaults locally so Run and direct or concurrent sweeps do not
+// mutate shared worker configuration.
+func (w *Worker) retryConfig() (retry.Policy, func() float64) {
+	policy := w.Policy
+	if policy.Waits == nil {
+		policy = retry.Default
+	}
+	randFloat64 := w.RandFloat64
+	if randFloat64 == nil {
+		randFloat64 = rand.Float64
+	}
+	return policy, randFloat64
 }
 
 func wait(ctx context.Context, d time.Duration) bool {
@@ -70,6 +82,8 @@ func wait(ctx context.Context, d time.Duration) bool {
 }
 
 func (w *Worker) consume(ctx context.Context, id string) {
+	log := w.logger()
+	policy, randFloat64 := w.retryConfig()
 	for ctx.Err() == nil {
 		if err := w.Stream.Ensure(ctx); err != nil {
 			if !wait(ctx, time.Second) {
@@ -98,7 +112,7 @@ func (w *Worker) consume(ctx context.Context, id string) {
 			cancel()
 			if err != nil {
 				if !errors.Is(err, store.ErrNotFound) {
-					w.Log.Warn("claim failed", "event_id", event)
+					log.Warn("claim failed", "event_id", event)
 				}
 				_ = w.Stream.Ack(ctx, m.ID)
 				continue
@@ -106,41 +120,38 @@ func (w *Worker) consume(ctx context.Context, id string) {
 			// Once leased, crash recovery is durable; no Redis pending entry is needed.
 			_ = w.Stream.Ack(ctx, m.ID)
 			result := w.Client.Deliver(ctx, lease)
-			// The completion time drives schedule math; the resulting absolute
-			// next attempt time is persisted once inside the fenced write.
-			var decision retry.Decision
-			if result.Outcome != "success" {
-				d, err := w.Policy.Decide(retry.Input{
-					Outcome:       result.Outcome,
-					StatusCode:    result.Status,
-					RetryAfter:    result.RetryAfter,
-					FailedAttempt: int(lease.Event.AttemptCount),
-					MaxAttempts:   int(lease.Endpoint.MaxAttempts),
-					CompletedAt:   time.Now(),
-				}, w.RandFloat64)
-				if err != nil {
-					w.Log.Error("retry scheduling failed; lease recovery will retry", "event_id", event, "error", err)
-					continue
-				}
-				decision = d
+			// Capture completion before any row-lock wait. Finish invokes this
+			// calculation only after accepting the lease fences.
+			completedAt := time.Now().UTC()
+			decide := func() (retry.Decision, error) {
+				return policy.Decide(retry.Input{
+					Outcome:        result.Outcome,
+					StatusCode:     result.Status,
+					PolicyRejected: result.PolicyRejected,
+					RetryAfter:     result.RetryAfter,
+					FailedAttempt:  int(lease.Event.AttemptCount),
+					MaxAttempts:    int(lease.Endpoint.MaxAttempts),
+					CompletedAt:    completedAt,
+				}, randFloat64)
 			}
 			finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			err = w.Store.Finish(finishCtx, lease, result, decision)
+			err = w.Store.Finish(finishCtx, lease, result, decide)
 			finishCancel()
 			if err != nil {
-				w.Log.Warn("attempt completion not committed; lease recovery will retry", "event_id", event)
+				log.Warn("attempt completion not committed; lease recovery will retry", "event_id", event)
 				continue
 			}
-			w.Log.Info("delivery attempt", "event_id", event, "attempt", lease.Event.AttemptCount, "outcome", result.Outcome, "status_code", result.Status, "duration_ms", result.Duration.Milliseconds())
+			log.Info("delivery attempt", "event_id", event, "attempt", lease.Event.AttemptCount, "outcome", result.Outcome, "status_code", result.Status, "duration_ms", result.Duration.Milliseconds())
 		}
 	}
 }
 func value(values map[string]any, key string) string { s, _ := values[key].(string); return s }
 
 func (w *Worker) sweepLoop(ctx context.Context) {
+	log := w.logger()
 	for ctx.Err() == nil {
 		if err := w.Sweep(ctx); err != nil && ctx.Err() == nil {
-			w.Log.Warn("sweep failed; will retry")
+			log.Warn("sweep failed; will retry")
 		}
 		if !wait(ctx, w.SweepInterval) {
 			return
@@ -151,12 +162,14 @@ func (w *Worker) sweepLoop(ctx context.Context) {
 // recoveryNext schedules the attempt after an interrupted one under the worker
 // policy. No Retry-After exists: the attempt never produced a response.
 func (w *Worker) recoveryNext(failedAttempt int) time.Time {
-	wait, ok := w.Policy.Wait(failedAttempt, w.RandFloat64)
+	policy, randFloat64 := w.retryConfig()
+	completedAt := time.Now().UTC()
+	wait, ok := policy.Wait(failedAttempt, randFloat64)
 	if !ok {
-		w.Log.Warn("no schedule entry for interrupted attempt; retrying immediately", "attempt", failedAttempt)
-		return time.Now()
+		w.logger().Warn("no schedule entry for interrupted attempt; retrying immediately", "attempt", failedAttempt)
+		return completedAt
 	}
-	return time.Now().Add(wait)
+	return completedAt.Add(wait)
 }
 
 func (w *Worker) Sweep(ctx context.Context) error {

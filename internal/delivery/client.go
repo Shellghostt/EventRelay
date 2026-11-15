@@ -18,6 +18,8 @@ import (
 
 type Client struct{ http *http.Client }
 
+var errBlockedAddress = errors.New("destination address is blocked")
+
 func New(timeout time.Duration, allowPrivate bool) *Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil // Environment proxies must not bypass destination checks.
@@ -38,7 +40,7 @@ func New(timeout time.Duration, allowPrivate bool) *Client {
 		}
 		for _, ip := range ips {
 			if !allowPrivate && !PublicIP(ip) {
-				return nil, errors.New("destination address is blocked")
+				return nil, errBlockedAddress
 			}
 		}
 		var last error
@@ -111,6 +113,9 @@ func (c *Client) Deliver(ctx context.Context, l store.Lease) (result store.Attem
 	req.Header.Set(hmacsign.HeaderName, hmacsign.Header(l.Endpoint.DeliverySecret, time.Now().Unix(), l.Event.Payload))
 	resp, err := c.http.Do(req)
 	if err != nil {
+		if errors.Is(err, errBlockedAddress) {
+			return store.AttemptResult{Outcome: "network", Error: "delivery connection failed", PolicyRejected: true}
+		}
 		var n net.Error
 		if errors.As(err, &n) && n.Timeout() {
 			return store.AttemptResult{Outcome: "timeout", Error: "delivery deadline exceeded"}
@@ -128,7 +133,9 @@ func (c *Client) Deliver(ctx context.Context, l store.Lease) (result store.Attem
 	// an arbitrary body cannot be reliably redacted by a credential regex.
 	_, err = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
 	if err != nil && result.Outcome != "non_retryable" {
-		return store.AttemptResult{Outcome: "network", Status: resp.StatusCode, Error: "response body read failed"}
+		result.Outcome = "network"
+		result.Error = "response body read failed"
+		return result
 	}
 	if result.Outcome != "success" {
 		result.Error = "HTTP " + strconv.Itoa(resp.StatusCode)

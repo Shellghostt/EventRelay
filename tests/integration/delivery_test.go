@@ -110,10 +110,10 @@ func TestExclusiveLeaseAndStaleCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = h.Store.Finish(ctx, old, store.AttemptResult{Outcome: "success"}, retry.Decision{}); !errors.Is(err, store.ErrLeaseLost) {
+	if err = h.Store.Finish(ctx, old, store.AttemptResult{Outcome: "success"}, nil); !errors.Is(err, store.ErrLeaseLost) {
 		t.Fatalf("stale completion: %v", err)
 	}
-	if err = h.Store.Finish(ctx, fresh, store.AttemptResult{Outcome: "success"}, retry.Decision{}); err != nil {
+	if err = h.Store.Finish(ctx, fresh, store.AttemptResult{Outcome: "success"}, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -152,7 +152,14 @@ func TestCompletionWaitingForRowLockRejectsExpiredLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- h.Store.Finish(ctx, lease, store.AttemptResult{Outcome: "success"}, retry.Decision{}) }()
+	var draws atomic.Int32
+	go func() {
+		done <- h.Store.Finish(ctx, lease, store.AttemptResult{Outcome: "retryable", Status: 500}, func() (retry.Decision, error) {
+			return retry.Decide(retry.Input{
+				Outcome: "retryable", StatusCode: 500, FailedAttempt: 1, MaxAttempts: 8, CompletedAt: time.Now(),
+			}, func() float64 { draws.Add(1); return 0.5 })
+		})
+	}()
 	// Prove Finish began before releasing the row lock, rather than relying on
 	// goroutine scheduling. PostgreSQL's now() remains that transaction's start.
 	for {
@@ -173,6 +180,9 @@ func TestCompletionWaitingForRowLockRejectsExpiredLease(t *testing.T) {
 	}
 	if err = <-done; !errors.Is(err, store.ErrLeaseLost) {
 		t.Fatalf("expired completion after lock wait: %v", err)
+	}
+	if got := draws.Load(); got != 0 {
+		t.Fatalf("expired completion drew jitter %d times; want none", got)
 	}
 }
 

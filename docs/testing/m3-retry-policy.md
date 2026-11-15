@@ -1,8 +1,12 @@
 # EventRelay M3 validation — retry policy and dead-letter handling — 2026-11-15
 
 Branch: `feat/m3-implementation`. M3 is implemented and verified on this feature branch only.
-It is **not merged into `main`**, nothing has been pushed, and CI has not run on it. The results
-below are local evidence, distinct from remote CI.
+It is **not merged into `main`**. These results were recorded locally before the branch's initial
+push and CI run; remote checks are tracked in
+[the branch's CI runs](https://github.com/Shellghostt/EventRelay/actions?query=branch%3Afeat%2Fm3-implementation).
+
+This is the original M3 validation. The [audit correction record](m3-audit-fixes.md) documents
+five subsequent fixes, additional regressions, and successful native Windows race and load reruns.
 
 Implementation: ER-017–ER-020 under [ADR 0005](../adr/0005-m3-retry-policy.md). The fixed 10-second
 delay is replaced by the documented schedule, jitter and `Retry-After`; fenced completion persists one
@@ -60,15 +64,16 @@ M2 reason values and enforces the taxonomy with a CHECK constraint.
 
 ## Skips and limits
 
-- **Native Windows `make race` was skipped by toolchain limitation, not passed.** Exact failure:
+- **The original native Windows `make race` could not build with the 32-bit compiler.** Exact failure:
   `# runtime/cgo` / `cc1.exe: sorry, unimplemented: 64-bit mode not compiled in` — the installed MinGW
   compiler only supports 32-bit mode, the same limitation recorded in
-  [the M1/M2 validation](m1-m2-validation.md). Race evidence comes from the Linux run above; CI runs
-  `go test -race` natively on windows-latest.
+  [the M1/M2 validation](m1-m2-validation.md). The
+  [audit correction record](m3-audit-fixes.md) records the supported 64-bit compiler and successful
+  native Windows race and load reruns. CI runs `go test -race` natively on windows-latest.
 - The four-process Compose load test (`TestComposeSustainedDelivery`) was **not rerun**; the bounded
   in-process run above is the M3 load evidence, and the recorded M2 Compose result remains M2 evidence.
-- CI has **not** run on `feat/m3-implementation` because nothing has been pushed. Green local runs do
-  not substitute for the CI matrix or the PostgreSQL/Redis integration job.
+- CI had not run when this local validation was recorded. Remote results are tracked in the CI link
+  above; local runs and the CI matrix/PostgreSQL-Redis integration job remain distinct evidence.
 - All local runs are finite, against disposable services with synthetic events. They do not establish
   throughput against arbitrary remote endpoints, long-run leak absence, or production readiness.
 - The M3 delivery demo with an injected short schedule (watching exhaustion and dead-letter promotion)

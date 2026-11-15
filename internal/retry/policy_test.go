@@ -171,6 +171,69 @@ func TestDecideNonRetryable(t *testing.T) {
 	}
 }
 
+func TestDecidePolicyRejectionBeforeExhaustion(t *testing.T) {
+	cases := []struct {
+		name          string
+		failedAttempt int
+		maxAttempts   int
+	}{
+		{"first attempt", 1, 8},
+		{"final default attempt", 8, 8},
+		{"final ceiling attempt", 20, 20},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d, err := Decide(Input{
+				Outcome: "network", PolicyRejected: true, FailedAttempt: c.failedAttempt,
+				MaxAttempts: c.maxAttempts, CompletedAt: completion,
+			}, sequence(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !d.Terminal || d.Reason != ReasonNonRetryablePolicy || !d.NextAttempt.IsZero() || d.Diagnostic != "" {
+				t.Fatalf("policy rejection = %+v; want immediate %s without jitter", d, ReasonNonRetryablePolicy)
+			}
+		})
+	}
+}
+
+func TestDecideRetryAfterForBrokenResponse(t *testing.T) {
+	cases := []struct {
+		name          string
+		outcome       string
+		status        int
+		header        string
+		failedAttempt int
+		want          time.Duration
+		diagnostic    string
+	}{
+		{"truncated 429", "network", 429, "3600", 1, time.Hour, ""},
+		{"truncated 503", "network", 503, "3600", 1, time.Hour, ""},
+		{"response before timeout", "timeout", 503, "3600", 1, time.Hour, ""},
+		{"HTTP date", "network", 503, completion.Add(time.Hour).Format(http.TimeFormat), 1, time.Hour, ""},
+		{"header cap", "network", 503, "172800", 1, 24 * time.Hour, ""},
+		{"longer policy wait", "network", 503, "3600", 7, 6 * time.Hour, ""},
+		{"invalid header", "network", 429, "soon", 1, 10 * time.Second, DiagnosticInvalidRetryAfter},
+		{"broken 2xx", "network", 200, "3600", 1, 10 * time.Second, ""},
+		{"no response", "network", 0, "3600", 1, 10 * time.Second, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d, err := Decide(Input{
+				Outcome: c.outcome, StatusCode: c.status, RetryAfter: c.header,
+				FailedAttempt: c.failedAttempt, MaxAttempts: 8, CompletedAt: completion,
+			}, sequence(t, 0.5))
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertApprox(t, d.NextAttempt, c.want)
+			if d.Terminal || d.Diagnostic != c.diagnostic {
+				t.Fatalf("broken response decision = %+v; want diagnostic %q", d, c.diagnostic)
+			}
+		})
+	}
+}
+
 func TestDecideRetryAfterPrecedence(t *testing.T) {
 	future := func(d time.Duration) string {
 		return completion.Add(d).UTC().Format(http.TimeFormat)

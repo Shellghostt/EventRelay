@@ -128,9 +128,12 @@ type Input struct {
 	// Outcome is the attempt classification: "retryable", "non_retryable",
 	// "timeout" or "network". "success" never reaches this package.
 	Outcome string
-	// StatusCode is the HTTP status of the response, or 0 when no response
-	// exists (timeout, network error, refused delivery).
+	// StatusCode is the HTTP response status, or 0 when no response was received.
+	// A body-read failure can retain a status even with a network outcome.
 	StatusCode int
+	// PolicyRejected distinguishes a blocked destination from a transient
+	// network failure without changing the attempt's outcome classification.
+	PolicyRejected bool
 	// RetryAfter is the raw Retry-After header value, empty when absent. It is
 	// parsed and discarded; it is never persisted or logged.
 	RetryAfter string
@@ -192,6 +195,9 @@ func (p Policy) Decide(in Input, randFloat64 func() float64) (Decision, error) {
 
 	// A refusal the destination returned, or one made before any request could
 	// be sent, is terminal regardless of the attempt budget.
+	if in.PolicyRejected {
+		return Decision{Terminal: true, Reason: ReasonNonRetryablePolicy}, nil
+	}
 	if in.Outcome == "non_retryable" {
 		reason := ReasonNonRetryableResponse
 		if in.StatusCode == 0 {
@@ -214,9 +220,11 @@ func (p Policy) Decide(in Input, randFloat64 func() float64) (Decision, error) {
 	}
 	next := in.CompletedAt.UTC().Add(wait)
 
-	// A Retry-After header exists only when a response came back. Timeout and
-	// network outcomes have no header to honor.
-	if in.Outcome != "retryable" || in.StatusCode == 0 {
+	// A body-read failure retains the received response's header even though
+	// M2 classifies the attempt as network. Only retryable response statuses
+	// contribute a header wait; failures before headers and broken 2xx do not.
+	if in.StatusCode != http.StatusRequestTimeout && in.StatusCode != http.StatusTooEarly &&
+		in.StatusCode != http.StatusTooManyRequests && in.StatusCode < http.StatusInternalServerError {
 		return Decision{NextAttempt: next}, nil
 	}
 

@@ -248,20 +248,32 @@ func TestDuplicateCompletionDoesNotRedrawSchedule(t *testing.T) {
 	if err := h.SQL.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&dbNow); err != nil {
 		t.Fatal(err)
 	}
-	decision := retry.Decision{NextAttempt: dbNow.Add(10 * time.Second)}
 	result := store.AttemptResult{Outcome: "retryable", Status: 500, Error: "HTTP 500"}
-	if err := h.Store.Finish(ctx, lease, result, decision); err != nil {
+	var draws atomic.Int32
+	decide := func() (retry.Decision, error) {
+		return retry.Decide(retry.Input{
+			Outcome: result.Outcome, StatusCode: result.Status, FailedAttempt: 1, MaxAttempts: 8, CompletedAt: dbNow,
+		}, func() float64 { draws.Add(1); return 0.5 })
+	}
+	if err := h.Store.Finish(ctx, lease, result, decide); err != nil {
 		t.Fatal(err)
 	}
 	if remaining := remainingSeconds(t, h, e.ID.String()); remaining < 8 || remaining > 10.5 {
 		t.Fatalf("next attempt in %vs; want the persisted ~10s", remaining)
 	}
-	if err := h.Store.Finish(ctx, lease, result, decision); !errors.Is(err, store.ErrLeaseLost) {
+	if err := h.Store.Finish(ctx, lease, result, decide); !errors.Is(err, store.ErrLeaseLost) {
 		t.Fatalf("duplicate completion: %v; want ErrLeaseLost", err)
 	}
 	// The persisted time is untouched by the rejected duplicate.
 	if remaining := remainingSeconds(t, h, e.ID.String()); remaining < 8 || remaining > 10.5 {
 		t.Fatalf("next attempt moved to %vs after a rejected duplicate", remaining)
+	}
+	var scheduled time.Time
+	if err := h.SQL.QueryRow(ctx, `SELECT next_attempt_at FROM events WHERE id=$1`, e.ID.String()).Scan(&scheduled); err != nil {
+		t.Fatal(err)
+	}
+	if !scheduled.Equal(dbNow.Add(10*time.Second)) || draws.Load() != 1 {
+		t.Fatalf("persisted time = %s, jitter draws = %d; want the original time and one draw", scheduled, draws.Load())
 	}
 }
 
@@ -363,8 +375,25 @@ func TestMigrationNormalizesM2ReasonsAndEnforcesCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer admin.Close()
-	migrationDSN := testutil.WithSearchPath(t, dsn, testutil.NewSchema(t, admin))
+	t.Cleanup(admin.Close)
+	var schema string
+	// Registered before NewSchema: this check runs after the schema drop and
+	// before admin.Close, proving the migration fixture cleans up its namespace.
+	t.Cleanup(func() {
+		if schema == "" {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var exists bool
+		if err := admin.QueryRow(cleanupCtx, `SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname=$1)`, schema).Scan(&exists); err != nil {
+			t.Error(err)
+		} else if exists {
+			t.Errorf("migration fixture leaked schema %s", schema)
+		}
+	})
+	schema = testutil.NewSchema(t, admin)
+	migrationDSN := testutil.WithSearchPath(t, dsn, schema)
 
 	// Phase 1: an M2 database, before 0003 exists.
 	m2, err := pgxpool.New(context.Background(), migrationDSN)

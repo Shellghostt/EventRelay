@@ -150,8 +150,11 @@ See [validation and limits](docs/testing/m1-m2-validation.md) before interpretin
 ## Roadmap
 
 M3 is implemented on `feat/m3-implementation` with recorded acceptance evidence
-([M3 validation record](docs/testing/m3-retry-policy.md)); it is not merged and CI has not run on the
-branch. Read the [M3 requirements and acceptance gates](docs/phases/M3.md) for the phase contract and
+([M3 validation record](docs/testing/m3-retry-policy.md)); it is not merged. Track remote checks in
+[the branch's CI runs](https://github.com/Shellghostt/EventRelay/actions?query=branch%3Afeat%2Fm3-implementation).
+The [audit correction record](docs/testing/m3-audit-fixes.md) covers five additional regressions
+and successful native Windows race and bounded load checks.
+Read the [M3 requirements and acceptance gates](docs/phases/M3.md) for the phase contract and
 the [development-tool audit](docs/DEVELOPMENT-TOOLS.md) before debugging.
 
 | Milestone | Deliverable | Status |

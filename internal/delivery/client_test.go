@@ -50,12 +50,12 @@ func TestBlockedDestinationAndTimeout(t *testing.T) {
 	l := store.Lease{Endpoint: store.Endpoint{URL: srv.URL}}
 	c := New(40*time.Millisecond, false)
 	defer c.Close()
-	if r := c.Deliver(context.Background(), l); r.Outcome != "network" || calls.Load() != 0 {
+	if r := c.Deliver(context.Background(), l); r.Outcome != "network" || !r.PolicyRejected || calls.Load() != 0 {
 		t.Fatalf("private destination reached: %+v", r)
 	}
 	c2 := New(40*time.Millisecond, true)
 	defer c2.Close()
-	if r := c2.Deliver(context.Background(), l); r.Outcome != "timeout" {
+	if r := c2.Deliver(context.Background(), l); r.Outcome != "timeout" || r.PolicyRejected {
 		t.Fatalf("%+v", r)
 	}
 	for _, ip := range []string{"127.0.0.1", "::1", "::ffff:127.0.0.1", "169.254.169.254", "10.1.2.3", "172.16.0.1", "192.168.1.1", "100.64.0.1", "0.0.0.0", "ff02::1", "fc00::1", "64:ff9b::a00:1", "64:ff9b:1::a00:1", "100::1", "2001::1", "2001:20::1", "2002:a00:1::1", "3fff::1", "192.88.99.1"} {
@@ -67,6 +67,38 @@ func TestBlockedDestinationAndTimeout(t *testing.T) {
 		if !PublicIP(netip.MustParseAddr(ip)) {
 			t.Errorf("public IP %s blocked", ip)
 		}
+	}
+}
+
+func TestBrokenRetryableResponsePreservesRetryAfter(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Length", "100")
+				w.Header().Set("Retry-After", "3600")
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte("short"))
+			}))
+			defer srv.Close()
+			c := New(time.Second, true)
+			defer c.Close()
+			r := c.Deliver(context.Background(), store.Lease{Endpoint: store.Endpoint{URL: srv.URL}})
+			if r.Outcome != "network" || r.Status != status || r.RetryAfter != "3600" ||
+				r.Error != "response body read failed" || r.PolicyRejected {
+				t.Fatalf("broken retryable response lost its metadata: %+v", r)
+			}
+		})
+	}
+}
+
+func TestTransportFailureDoesNotRejectPolicy(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	srv.Close()
+	c := New(time.Second, true)
+	defer c.Close()
+	r := c.Deliver(context.Background(), store.Lease{Endpoint: store.Endpoint{URL: srv.URL}})
+	if r.Outcome != "network" || r.Status != 0 || r.PolicyRejected {
+		t.Fatalf("transport failure became a policy rejection: %+v", r)
 	}
 }
 

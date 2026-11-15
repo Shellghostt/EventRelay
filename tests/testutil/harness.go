@@ -88,6 +88,7 @@ func DatabaseURL(t testing.TB) string {
 }
 
 // NewSchema creates an isolated schema that is dropped when the test ends.
+// Register admin.Close with t.Cleanup before calling NewSchema.
 func NewSchema(t testing.TB, admin *pgxpool.Pool) string {
 	t.Helper()
 	ctx := context.Background()
@@ -95,7 +96,13 @@ func NewSchema(t testing.TB, admin *pgxpool.Pool) string {
 	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = admin.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE") })
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, err := admin.Exec(cleanupCtx, "DROP SCHEMA "+schema+" CASCADE"); err != nil {
+			t.Errorf("drop test schema %s: %v", schema, err)
+		}
+	})
 	return schema
 }
 

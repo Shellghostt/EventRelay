@@ -13,7 +13,7 @@ depends_on:
   - Redis 7.2
   - Docker (development only)
 created: 2026-11-13
-updated: 2026-11-14
+updated: 2026-11-15
 ---
 
 # EventRelay — Implementation Plan
@@ -26,7 +26,10 @@ updated: 2026-11-14
 ## 0. Machine context
 
 M2 is complete and merged into `main`. M3 (retry policy and dead-letter handling) is implemented on
-`feat/m3-implementation` with recorded acceptance evidence; it is not merged and CI has not run on it.
+`feat/m3-implementation` with recorded local acceptance evidence; it is not merged.
+Remote checks are tracked in [the branch's CI runs](https://github.com/Shellghostt/EventRelay/actions?query=branch%3Afeat%2Fm3-implementation).
+The [audit correction record](testing/m3-audit-fixes.md) covers the five subsequent fixes and native
+Windows race/load verification.
 The [M3 requirements](phases/M3.md) define the phase and its acceptance gates.
 [ADR 0005](adr/0005-m3-retry-policy.md) records the policy decisions the implementation follows. The
 [development-tool audit](DEVELOPMENT-TOOLS.md) records actual coverage and profiling limits.
@@ -38,7 +41,7 @@ project: EventRelay
 status: mvp                      # skeleton | mvp | v1 | maintenance
 version: 0.1.0
 builds: true
-functional: partial              # ingestion and M2 delivery work; M3-M6 remain
+functional: partial              # ingestion and delivery work; M4-M6 remain
 
 implemented:
   - Redis Streams dispatch with durable PostgreSQL republication
@@ -616,7 +619,10 @@ passed for the merged baseline. Local runs and remote CI are distinct evidence; 
 events and expired leases.
 
 Status: implemented on `feat/m3-implementation`; acceptance evidence in the
-[M3 validation record](testing/m3-retry-policy.md). Not merged into `main`; CI has not run on the branch.
+[M3 validation record](testing/m3-retry-policy.md). Not merged into `main`; remote checks are tracked in
+[the branch's CI runs](https://github.com/Shellghostt/EventRelay/actions?query=branch%3Afeat%2Fm3-implementation).
+The [audit correction record](testing/m3-audit-fixes.md) covers the five additional regressions and
+successful native Windows race and bounded load checks.
 
 **Acceptance criteria**
 
@@ -629,7 +635,8 @@ Status: implemented on `feat/m3-implementation`; acceptance evidence in the
 - [x] M2 database upgrade preserves events, attempts and dead letters
 
 All seven criteria were verified locally against real PostgreSQL 16 and Redis 7.2; the exact commands,
-outputs and the recorded native-Windows race skip are in the validation record.
+outputs and the original native-Windows compiler failure are in the validation record. Subsequent
+native Windows race and load reruns passed, as recorded in the audit correction record.
 
 **Demo:** inject a short test schedule to watch exhaustion and dead-letter promotion. Production schedule
 overrides require documented configuration and an ADR before implementation.
@@ -853,8 +860,10 @@ events, how to restore from backup.
 This section exists because AI assistants and future maintainers routinely describe planned work as done.
 
 **Facts you may rely on:** ingestion, Redis dispatch and signed HTTP delivery are implemented.
-The M2 worker uses fenced PostgreSQL leases, records attempts, recovers expired leases and retries
-failures every 10 seconds. Full retry policy, replay, tenancy and UI remain future milestones.
+The worker uses fenced PostgreSQL leases, records attempts and recovers expired leases. M3 applies
+the documented backoff, jitter, Retry-After and stable terminal reasons on the feature branch;
+[audit corrections and verification](testing/m3-audit-fixes.md) are recorded locally. Inspection,
+replay, tenancy and UI remain future milestones.
 
 **Rules:** update implemented/not_implemented, README and CHANGELOG together. Never claim
 exactly-once delivery, production readiness, or performance without a recorded run.

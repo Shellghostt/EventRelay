@@ -73,31 +73,18 @@ type AttemptResult struct {
 	// RetryAfter is the raw Retry-After header of a retryable response. The
 	// caller parses it and never persists or logs the raw value.
 	RetryAfter string
+	// PolicyRejected marks a destination address refused before dialing. It
+	// preserves the M2 network outcome while selecting the policy terminal reason.
+	PolicyRejected bool
 }
 
 // Finish commits the attempt and event transition together. Stale workers
-// cannot write. The caller computes the retry decision under its own policy
-// and clock; this persists it exactly once inside the fences, so duplicate
-// completions and sweeps can neither redraw jitter nor extend a scheduled
-// retry (ADR 0005).
-func (s *Store) Finish(ctx context.Context, lease Lease, result AttemptResult, decision retry.Decision) error {
-	if result.Outcome == "success" && decision.Terminal {
-		return errors.New("store: success outcome marked terminal")
-	}
-	if result.Outcome != "success" && !decision.Terminal && decision.NextAttempt.IsZero() {
-		return errors.New("store: retry decision without a next attempt time")
-	}
-	if decision.Terminal && decision.Reason == "" {
-		return errors.New("store: terminal decision without a reason")
-	}
-	errorText := result.Error
-	if decision.Diagnostic != "" {
-		if errorText == "" {
-			errorText = decision.Diagnostic
-		} else {
-			errorText = errorText + "; " + decision.Diagnostic
-		}
-	}
+// cannot write. For failures, decide runs once after the row lock and all lease
+// fences succeed. The caller captures completion time before calling Finish
+// and supplies a calculation under its own policy; stale completions never
+// redraw jitter. Successful attempts do not call decide and may pass nil.
+// The callback must be a bounded calculation without I/O while the row is locked.
+func (s *Store) Finish(ctx context.Context, lease Lease, result AttemptResult, decide func() (retry.Decision, error)) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -122,6 +109,30 @@ func (s *Store) Finish(ctx context.Context, lease Lease, result AttemptResult, d
 	}
 	if !live {
 		return ErrLeaseLost
+	}
+	var decision retry.Decision
+	if result.Outcome != "success" {
+		if decide == nil {
+			return errors.New("store: retry decision is required")
+		}
+		decision, err = decide()
+		if err != nil {
+			return fmt.Errorf("store: retry scheduling failed: %w", err)
+		}
+		if !decision.Terminal && decision.NextAttempt.IsZero() {
+			return errors.New("store: retry decision without a next attempt time")
+		}
+		if decision.Terminal && decision.Reason == "" {
+			return errors.New("store: terminal decision without a reason")
+		}
+	}
+	errorText := result.Error
+	if decision.Diagnostic != "" {
+		if errorText == "" {
+			errorText = decision.Diagnostic
+		} else {
+			errorText = errorText + "; " + decision.Diagnostic
+		}
 	}
 	status := StatusPending
 	if result.Outcome == "success" {

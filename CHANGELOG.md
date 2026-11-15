@@ -52,6 +52,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Truncated retryable responses retain `Retry-After`, and blocked destinations receive
+  `non_retryable_policy` while retaining their M2 attempt classification.
+- Retry scheduling runs after completion fences without redrawing jitter for stale workers or shifting
+  completion time during a row-lock wait. Direct and concurrent sweeps resolve worker defaults safely.
+- The migration fixture drops its schema before closing the admin pool, reports cleanup errors and
+  verifies the schema is gone. [Audit corrections and validation](docs/testing/m3-audit-fixes.md).
 - Integration CI uses Docker-assigned PostgreSQL/Redis host ports and waits for PostgreSQL TCP
   readiness, avoiding runner port conflicts before the delivery tests can start.
 - M1 signed JSON null rejection, DSN query/username credential redaction, repeatable integration queries,

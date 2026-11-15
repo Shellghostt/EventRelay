@@ -49,4 +49,3 @@ State the branch and commit, read the phase/ADRs, refresh the graph after source
 the exact failing command, output and minimal synthetic fixture. Keep implementation on a feature
 branch. A skipped integration test must be reported as skipped, with its missing dependency; it is not
 a passing check. Preserve local Docker volumes and use disposable databases for migration tests.
-
