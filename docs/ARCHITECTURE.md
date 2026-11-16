@@ -1,7 +1,8 @@
 # EventRelay Architecture
 
-**Status: partially implemented (M2).** Ingestion, Redis transport and HTTP delivery exist.
-Full retry policy, replay, tenancy and the dashboard remain planned. See [ADR 0004](adr/0004-m2-delivery.md).
+**Status: M2 merged into main; M3 implemented on `feat/m3-implementation`, not merged.** Ingestion,
+Redis transport, HTTP delivery and the M3 retry policy exist. Replay, tenancy and the dashboard remain
+planned. See [ADR 0004](adr/0004-m2-delivery.md) and [ADR 0005](adr/0005-m3-retry-policy.md).
 
 ## Context
 
@@ -50,11 +51,21 @@ HTTP destinations are checked at DNS resolution and the selected IP is dialed di
 environment proxies are followed. Headers, response reads, HTTP time and database operations are bounded.
 Response content is discarded. Readiness checks both backing services; liveness is independent of them.
 
-The diagram also shows planned management and dashboard components. M2 provides fixed 10-second
-retries, not the M3 exponential policy. Tests and measured limits are recorded in
-[testing/m1-m2-validation.md](testing/m1-m2-validation.md).
+The diagram also shows planned management and dashboard components. M3 replaces the M2 fixed 10-second
+retries with the documented schedule, jitter, Retry-After and stable terminal reasons
+([ADR 0005](adr/0005-m3-retry-policy.md)). M2 tests and measured limits are recorded in
+[testing/m1-m2-validation.md](testing/m1-m2-validation.md); M3 acceptance evidence is recorded in
+[testing/m3-retry-policy.md](testing/m3-retry-policy.md).
 
 ## What is deliberately absent
 
 See [PLAN.md](PLAN.md) section 4 (non-goals). If a component is not on that diagram, it is not part of the
 design.
+
+## M3
+
+M3 (retry policy and dead-letter handling) is implemented on `feat/m3-implementation` under
+[ADR 0005](adr/0005-m3-retry-policy.md) with acceptance evidence in
+[testing/m3-retry-policy.md](testing/m3-retry-policy.md); it is not merged into `main`. The
+[phase requirements](phases/M3.md) hold the contract, and [development tools](DEVELOPMENT-TOOLS.md)
+record actual tooling coverage.

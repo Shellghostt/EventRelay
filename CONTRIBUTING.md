@@ -9,6 +9,9 @@ Thanks for taking the time. This document is deliberately short and specific.
 2. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - how the pieces fit together.
 3. [docs/adr/](docs/adr/) - decisions that have already been argued about. Do not relitigate them
    without a new ADR.
+4. [docs/phases/M3.md](docs/phases/M3.md) - M3 scope, evidence, unresolved ADR decisions and acceptance gates.
+5. [docs/DEVELOPMENT-TOOLS.md](docs/DEVELOPMENT-TOOLS.md) - CodeGraph freshness, static-analysis coverage
+   and profiling appropriate to this repository's runtime.
 
 ## Ground rules
 

@@ -6,9 +6,10 @@
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 ![Go](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)
 
-**Status: M2 (unreleased).** Signed events are stored durably and dispatched through Redis Streams to
+**Status: M2 merged into main; M3 implemented on `feat/m3-implementation`, not merged.** Signed events are stored durably and dispatched through Redis Streams to
 independently scaled HTTP workers. Delivery is at least once: destinations must deduplicate by event ID.
-M2 uses a fixed 10-second retry delay and caps attempts; the full backoff and Retry-After policy is M3.
+Retries follow the documented backoff schedule with jitter and `Retry-After`, and dead letters carry a
+stable terminal reason ([ADR 0005](docs/adr/0005-m3-retry-policy.md)).
 
 ## Why this exists
 
@@ -24,15 +25,15 @@ can read end to end does not really exist as a mature open-source project. Event
 | Multi-tenant webhook endpoints | M5 | Not started |
 | Event ingestion and persistence | M1 | **Done** |
 | HMAC signature verification | M1 | **Done** |
-| Asynchronous delivery workers | M2 | **Done (unreleased)** |
-| Configurable retry policies | M3 | Not started |
-| Dead-letter queue | M3 | Not started |
+| Asynchronous delivery workers | M2 | **Done (merged)** |
+| Configurable retry policies | M3 | **Done** (feature branch; documented schedule, deliberately not configurable — ADR 0005) |
+| Full dead-letter policy and terminal reasons | M3 | **Done** (feature branch) |
 | Request inspection and delivery history | M4 | Not started |
 | Manual event replay | M4 | Not started |
 | API key management | M5 | Not started |
 | OpenAPI documentation | M1 | **Done** (implemented paths only) |
 | Per-tenant rate limits | M5 | Not started |
-| Horizontal worker scaling | M2 | **Done (unreleased)** |
+| Horizontal worker scaling | M2 | **Done (merged)** |
 | Idempotency keys | M5 | Not started (header accepted, ignored) |
 | Event ordering options | M6 | Not started |
 | Distributed tracing | M6 | Not started |
@@ -137,7 +138,7 @@ See [validation and limits](docs/testing/m1-m2-validation.md) before interpretin
 | `internal/stream` | Bounded Redis dispatch and pending-entry cleanup |
 | `internal/worker` | Lease, delivery, completion and recovery loops |
 | `internal/store` | PostgreSQL access, queries, migrations runner |
-| `internal/retry` | Backoff schedule, scheduling, dead-letter promotion (empty until M3) |
+| `internal/retry` | Retry schedule, jitter, Retry-After parsing and terminal decisions (ADR 0005) |
 | `internal/auth` | API keys and tenant resolution (empty until M5) |
 | `pkg/hmacsign` | Public signing and verification helpers, safe to import |
 | `api/openapi.yaml` | OpenAPI 3.1 contract; only implemented paths appear |
@@ -148,11 +149,19 @@ See [validation and limits](docs/testing/m1-m2-validation.md) before interpretin
 
 ## Roadmap
 
+M3 is implemented on `feat/m3-implementation` with recorded acceptance evidence
+([M3 validation record](docs/testing/m3-retry-policy.md)); it is not merged. Track remote checks in
+[the branch's CI runs](https://github.com/Shellghostt/EventRelay/actions?query=branch%3Afeat%2Fm3-implementation).
+The [audit correction record](docs/testing/m3-audit-fixes.md) covers five additional regressions
+and successful native Windows race and bounded load checks.
+Read the [M3 requirements and acceptance gates](docs/phases/M3.md) for the phase contract and
+the [development-tool audit](docs/DEVELOPMENT-TOOLS.md) before debugging.
+
 | Milestone | Deliverable | Status |
 |---|---|---|
 | M1 | HTTP ingestion API and durable event storage | **Done** (v0.1.0) |
-| M2 | Redis Streams transport, worker pool, horizontal scaling | **Done (unreleased)** |
-| M3 | Retry scheduler and dead-letter queue | Not started |
+| M2 | Redis Streams transport, worker pool, horizontal scaling | **Done (merged)** |
+| M3 | Retry scheduler and dead-letter queue | **Done** (feature branch, not merged) |
 | M4 | Dashboard, request inspection and manual replay | Not started |
 | M5 | Multi-tenancy, API keys, rate limits, idempotency | Not started |
 | M6 | Ordering options, tracing, backpressure, load test report, docs | Not started |

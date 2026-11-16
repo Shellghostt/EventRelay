@@ -13,7 +13,7 @@ depends_on:
   - Redis 7.2
   - Docker (development only)
 created: 2026-11-13
-updated: 2026-11-13
+updated: 2026-11-15
 ---
 
 # EventRelay — Implementation Plan
@@ -25,6 +25,15 @@ updated: 2026-11-13
 
 ## 0. Machine context
 
+M2 is complete and merged into `main`. M3 (retry policy and dead-letter handling) is implemented on
+`feat/m3-implementation` with recorded local acceptance evidence; it is not merged.
+Remote checks are tracked in [the branch's CI runs](https://github.com/Shellghostt/EventRelay/actions?query=branch%3Afeat%2Fm3-implementation).
+The [audit correction record](testing/m3-audit-fixes.md) covers the five subsequent fixes and native
+Windows race/load verification.
+The [M3 requirements](phases/M3.md) define the phase and its acceptance gates.
+[ADR 0005](adr/0005-m3-retry-policy.md) records the policy decisions the implementation follows. The
+[development-tool audit](DEVELOPMENT-TOOLS.md) records actual coverage and profiling limits.
+
 Read this block first. It is the fastest way to know what is true about this repository right now.
 
 ```yaml
@@ -32,12 +41,12 @@ project: EventRelay
 status: mvp                      # skeleton | mvp | v1 | maintenance
 version: 0.1.0
 builds: true
-functional: partial              # ingestion and M2 delivery work; M3-M6 remain
+functional: partial              # ingestion and delivery work; M4-M6 remain
 
 implemented:
   - Redis Streams dispatch with durable PostgreSQL republication
   - bounded signed HTTP workers, fenced leases, crash recovery and recorded attempts
-  - fixed 10 s retries and terminal dead-letter records (full policy is M3)
+  - exponential retry schedule with jitter, Retry-After support and stable terminal reasons (ER-017–ER-020, ADR 0005)
   - destination IP protection and explicit trusted-proxy attribution
   - environment configuration with validation and redacted logging
   - structured logging and prometheus metrics on /metrics
@@ -51,8 +60,6 @@ implemented:
   - integration tests for the store, gated on EVENTRELAY_TEST_DATABASE_URL
 
 not_implemented:
-  - exponential retry scheduler with jitter and Retry-After
-  - full retry/backoff policy and DLQ management
   - replay
   - delivery history and attempt endpoints
   - endpoint get, update, enable/disable and delete
@@ -137,8 +144,8 @@ These are decisions, not omissions. Do not implement them without superseding th
 
 ### v0.1 — MVP (M1–M3)
 
-One tenant, multiple endpoints, signed ingestion, durable storage, retries, dead-letter queue, manual
-replay via API. No dashboard, no rate limits, no ordering.
+One tenant, multiple endpoints, signed ingestion, durable storage, retries and dead-letter records.
+Inspection and manual replay APIs belong to M4. No dashboard, no rate limits, no ordering in M1–M3.
 
 ### v1.0 — public release (M4–M6)
 
@@ -415,8 +422,9 @@ Outbound requests add `X-EventRelay-Event-Id`, `X-EventRelay-Attempt`, and `User
 
 ### 9.2 Retry schedule
 
-The following full policy is planned for M3. M2 uses a fixed 10-second delay and already enforces
-`max_attempts`, non-retryable failures, terminal dead letters and endpoint disabling on HTTP 410.
+The full policy below is implemented on `feat/m3-implementation` per [ADR 0005](adr/0005-m3-retry-policy.md),
+replacing the M2 fixed 10-second delay. It preserves M2's enforcement of `max_attempts`, non-retryable
+failures, terminal dead letters and endpoint disabling on HTTP 410.
 
 Base delays, indexed by failed attempt number:
 
@@ -432,9 +440,13 @@ Base delays, indexed by failed attempt number:
 | 8 | 24 h |
 
 - Jitter: `delay * random(0.8, 1.2)`.
-- `Retry-After` (seconds or HTTP date) overrides the base delay when it is **larger**, capped at 24 h.
+- `Retry-After` (seconds or HTTP date) supplies a minimum wait capped at 24 h; use the larger of that
+  wait and the jittered schedule. Invalid/past/overflow values fall back to the schedule.
 - `max_attempts` is per endpoint, default 8, hard ceiling 20.
-- Default total retry window ≈ 39 h for 8 attempts.
+- Check exhaustion before scheduling. Attempts 8–19 reuse the 24 h entry only when another attempt is allowed.
+- Default seven nominal waits total 31,360 s (8h42m40s), excluding jitter, Retry-After and request/dispatch time.
+  See [M3 requirements](phases/M3.md) for scheduling, atomicity and interrupted-attempt decisions and
+  [ADR 0005](adr/0005-m3-retry-policy.md) for the recorded policy.
 
 ### 9.3 Outcome classification
 
@@ -591,13 +603,13 @@ records attempts. Horizontal scaling via `docker compose up --scale worker=4`.
 - [x] Destination returning 500 causes a retry; destination returning 400 causes dead-letter
 - [x] 4 workers sustain 10,000 events/min in `tests/load` with no unbounded memory growth
 
-Status: complete on `feat/m2-implementation`, unreleased. Native Windows tests and the full Linux race
+Status: complete and merged into `main`. Native Windows tests and the full Linux race
 suite passed against PostgreSQL 16 and Redis 7.2. The four-process Compose load run delivered 10,000
 events in 58.84198 s (10,196.80/min), with 10,000 attempts and no duplicates. Container memory samples
 stayed around 8 MiB per worker; the separate four-CPU in-process test also showed a stable heap.
 See [the measured report](benchmarks/m2-delivery.md) and [validation record](testing/m1-m2-validation.md).
-These are finite local runs. The feature branch has not been run on macOS or Windows with `-race` locally;
-the existing CI matrix will verify those platforms when it runs. No release tag is made from this laptop.
+These are finite local runs. Main CI [43553657179](https://github.com/shellghostt/eventrelay/actions/runs/43553657179)
+passed for the merged baseline. Local runs and remote CI are distinct evidence; no M3 checks are claimed.
 
 **Demo:** a local endpoint that fails twice then succeeds; the attempt list shows three attempts.
 
@@ -606,15 +618,28 @@ the existing CI matrix will verify those platforms when it runs. No release tag 
 **Deliverable:** the documented backoff schedule, `Retry-After` support, DLQ with reason, sweeper for due
 events and expired leases.
 
+Status: implemented on `feat/m3-implementation`; acceptance evidence in the
+[M3 validation record](testing/m3-retry-policy.md). Not merged into `main`; remote checks are tracked in
+[the branch's CI runs](https://github.com/Shellghostt/EventRelay/actions?query=branch%3Afeat%2Fm3-implementation).
+The [audit correction record](testing/m3-audit-fixes.md) covers the five additional regressions and
+successful native Windows race and bounded load checks.
+
 **Acceptance criteria**
 
-- [ ] Backoff matches the table ±20% jitter, verified by a unit test with a fake clock
-- [ ] `Retry-After: 3600` delays the next attempt by one hour
-- [ ] Attempt 8 failure moves the event to `dead_letters` with a reason
-- [ ] Sweeper is idempotent: running it twice does not double-schedule
-- [ ] Non-retryable 4xx skips remaining attempts
+- [x] Backoff matches the table ±20% jitter, verified by a unit test with a fake clock
+- [x] `Retry-After: 3600` after failure 1 delays at least one hour; a longer jittered policy wait wins
+- [x] Attempt 8 failure moves the event to `dead_letters` with a reason
+- [x] Concurrent/repeated sweepers preserve one attempt per lease and one persisted retry time
+- [x] Non-retryable 4xx skips remaining attempts
+- [x] Interrupted final attempts, malformed/date headers, restart and Redis-loss cases pass
+- [x] M2 database upgrade preserves events, attempts and dead letters
 
-**Demo:** `EVENTRELAY_` override of the schedule to seconds, watch an event exhaust and land in DLQ.
+All seven criteria were verified locally against real PostgreSQL 16 and Redis 7.2; the exact commands,
+outputs and the original native-Windows compiler failure are in the validation record. Subsequent
+native Windows race and load reruns passed, as recorded in the audit correction record.
+
+**Demo:** inject a short test schedule to watch exhaustion and dead-letter promotion. Production schedule
+overrides require documented configuration and an ADR before implementation.
 
 ### M4 — Inspection, replay and dashboard
 
@@ -835,8 +860,10 @@ events, how to restore from backup.
 This section exists because AI assistants and future maintainers routinely describe planned work as done.
 
 **Facts you may rely on:** ingestion, Redis dispatch and signed HTTP delivery are implemented.
-The M2 worker uses fenced PostgreSQL leases, records attempts, recovers expired leases and retries
-failures every 10 seconds. Full retry policy, replay, tenancy and UI remain future milestones.
+The worker uses fenced PostgreSQL leases, records attempts and recovers expired leases. M3 applies
+the documented backoff, jitter, Retry-After and stable terminal reasons on the feature branch;
+[audit corrections and verification](testing/m3-audit-fixes.md) are recorded locally. Inspection,
+replay, tenancy and UI remain future milestones.
 
 **Rules:** update implemented/not_implemented, README and CHANGELOG together. Never claim
 exactly-once delivery, production readiness, or performance without a recorded run.

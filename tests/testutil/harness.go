@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shellghostt/eventrelay/internal/delivery"
+	"github.com/shellghostt/eventrelay/internal/retry"
 	"github.com/shellghostt/eventrelay/internal/store"
 	"github.com/shellghostt/eventrelay/internal/stream"
 	"github.com/shellghostt/eventrelay/internal/worker"
@@ -25,6 +26,9 @@ type Harness struct {
 	Stream   *stream.Stream
 	DSN      string
 	RedisURL string
+	// Policy overrides the worker retry schedule. Tests may inject a shorter
+	// schedule (ADR 0005); a fast flat schedule applies when unset.
+	Policy retry.Policy
 }
 
 func New(t testing.TB) *Harness {
@@ -38,12 +42,8 @@ func New(t testing.TB) *Harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schema := "er_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
-		admin.Close()
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _, _ = admin.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE"); admin.Close() })
+	t.Cleanup(admin.Close)
+	schema := NewSchema(t, admin)
 	u, err := url.Parse(dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -76,6 +76,58 @@ func New(t testing.TB) *Harness {
 	t.Cleanup(func() { _ = transport.Client.Del(ctx, transport.Key).Err(); _ = transport.Close() })
 	return &Harness{Store: s, SQL: sql, Stream: transport, DSN: dsn, RedisURL: redisURL}
 }
+
+// DatabaseURL returns the test PostgreSQL URL or skips the test.
+func DatabaseURL(t testing.TB) string {
+	t.Helper()
+	dsn := os.Getenv("EVENTRELAY_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("EVENTRELAY_TEST_DATABASE_URL is not set")
+	}
+	return dsn
+}
+
+// NewSchema creates an isolated schema that is dropped when the test ends.
+// Register admin.Close with t.Cleanup before calling NewSchema.
+func NewSchema(t testing.TB, admin *pgxpool.Pool) string {
+	t.Helper()
+	ctx := context.Background()
+	schema := "er_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, err := admin.Exec(cleanupCtx, "DROP SCHEMA "+schema+" CASCADE"); err != nil {
+			t.Errorf("drop test schema %s: %v", schema, err)
+		}
+	})
+	return schema
+}
+
+// WithSearchPath returns dsn narrowed to the given schema.
+func WithSearchPath(t testing.TB, dsn, schema string) string {
+	t.Helper()
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	q.Set("search_path", schema)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// Status reads an event's current status.
+func (h *Harness) Status(t testing.TB, id uuid.UUID) string {
+	t.Helper()
+	var got string
+	if err := h.SQL.QueryRow(context.Background(), `SELECT status FROM events WHERE id=$1`, id.String()).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
 func (h *Harness) Endpoint(t testing.TB, target string) store.Endpoint {
 	t.Helper()
 	ep, err := h.Store.CreateEndpoint(context.Background(), store.CreateEndpointInput{TenantID: uuid.MustParse(store.DefaultTenantID), URL: target, IngestSecret: []byte("ingest-secret"), DeliverySecret: []byte("delivery-secret"), MaxAttempts: 8})
@@ -98,8 +150,12 @@ func (h *Harness) Start(t testing.TB, n int) {
 
 func (h *Harness) StartWithTiming(t testing.TB, n int, lease, sweep time.Duration) {
 	t.Helper()
+	policy := h.Policy
+	if policy.Waits == nil {
+		policy = retry.Policy{Waits: func(int) (time.Duration, bool) { return 50 * time.Millisecond, true }}
+	}
 	c := delivery.New(time.Second, true)
-	w := worker.Worker{Store: h.Store, Stream: h.Stream, Client: c, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Concurrency: n, LeaseDuration: lease, SweepInterval: sweep, RetryDelay: 50 * time.Millisecond}
+	w := worker.Worker{Store: h.Store, Stream: h.Stream, Client: c, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Concurrency: n, LeaseDuration: lease, SweepInterval: sweep, Policy: policy}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()

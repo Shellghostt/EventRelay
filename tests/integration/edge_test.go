@@ -120,7 +120,7 @@ func TestFailedCompletionRollsBackAttemptAndRecovers(t *testing.T) {
 	if _, err = h.SQL.Exec(ctx, `CREATE TRIGGER fail_completion BEFORE UPDATE ON events FOR EACH ROW EXECUTE FUNCTION fail_completion()`); err != nil {
 		t.Fatal(err)
 	}
-	if err = h.Store.Finish(ctx, lease, store.AttemptResult{Outcome: "success", Duration: time.Millisecond}, time.Second); err == nil {
+	if err = h.Store.Finish(ctx, lease, store.AttemptResult{Outcome: "success", Duration: time.Millisecond}, nil); err == nil {
 		t.Fatal("injected completion failure was ignored")
 	}
 	var outcome string
@@ -137,14 +137,14 @@ func TestFailedCompletionRollsBackAttemptAndRecovers(t *testing.T) {
 	if _, err = h.SQL.Exec(ctx, `UPDATE events SET lease_expires_at=now()-interval '1 second' WHERE id=$1`, e.ID.String()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = h.Store.RecoverExpired(ctx, ep.TenantID); err != nil {
+	if _, err = h.Store.RecoverExpired(ctx, ep.TenantID, func(int) time.Time { return time.Now() }); err != nil {
 		t.Fatal(err)
 	}
 	fresh, err := h.Store.Claim(ctx, ep.TenantID, e.ID, "replacement", time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = h.Store.Finish(ctx, fresh, store.AttemptResult{Outcome: "success"}, time.Second); err != nil {
+	if err = h.Store.Finish(ctx, fresh, store.AttemptResult{Outcome: "success"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	h.Wait(t, e.ID, "delivered", time.Second)
