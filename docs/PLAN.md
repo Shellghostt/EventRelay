@@ -13,7 +13,7 @@ depends_on:
   - Redis 7.2
   - Docker (development only)
 created: 2026-11-13
-updated: 2026-11-15
+updated: 2026-11-17
 ---
 
 # EventRelay — Implementation Plan
@@ -25,14 +25,17 @@ updated: 2026-11-15
 
 ## 0. Machine context
 
-M2 is complete and merged into `main`. M3 (retry policy and dead-letter handling) is implemented on
-`feat/m3-implementation` with recorded local acceptance evidence; it is not merged.
-Remote checks are tracked in [the branch's CI runs](https://github.com/Shellghostt/EventRelay/actions?query=branch%3Afeat%2Fm3-implementation).
+M1–M3 are complete and merged into `main`. [M3 PR #3](https://github.com/Shellghostt/EventRelay/pull/3)
+merged at `853486150244a008146e5c00b5c2749179b53da2`; its
+[main CI](https://github.com/Shellghostt/EventRelay/actions/runs/43802341943) passed.
 The [audit correction record](testing/m3-audit-fixes.md) covers the five subsequent fixes and native
 Windows race/load verification.
 The [M3 requirements](phases/M3.md) define the phase and its acceptance gates.
 [ADR 0005](adr/0005-m3-retry-policy.md) records the policy decisions the implementation follows. The
 [development-tool audit](DEVELOPMENT-TOOLS.md) records actual coverage and profiling limits.
+M4 is **Not started**. The [M4 requirements](phases/M4.md) and
+[proposed ADR 0006](adr/0006-m4-replay-and-inspection.md) prepare inspection, replay accounting,
+endpoint recovery and the dashboard; they are not implementation or acceptance evidence.
 
 Read this block first. It is the fastest way to know what is true about this repository right now.
 
@@ -225,23 +228,26 @@ flowchart LR
 If the insert succeeds and the publish fails, the event is still `pending` and the scheduler sweep picks it
 up. A failed publish is never a lost event.
 
-**Delivery (M2).** A worker claims a due `pending` event using `FOR UPDATE SKIP LOCKED`, sets
+**Delivery (M2 fences, M3 policy).** A worker claims a due `pending` event using `FOR UPDATE SKIP LOCKED`, sets
 `status=in_flight`, a random lease token and `lease_expires_at=now()+60s`, and increments `attempt_count`.
 It inserts the attempt before committing the claim and beginning HTTP I/O. Completion locks the event,
 checks the token, attempt number and database wall time, then commits the attempt and event together:
 
 - 2xx → `status=delivered`, `delivered_at=now()`
-- retryable → `status=pending`, `next_attempt_at=now()+10s` (M3 replaces this with backoff)
+- retryable with budget remaining → `status=pending`, one persisted M3 backoff/jitter/Retry-After time
 - non-retryable → `status=dead_lettered`, insert `dead_letters`
 - exhausted → `status=dead_lettered`
 
-If the worker dies mid-attempt, `lease_expires_at` passes and the sweeper returns the event to `pending`.
+If the worker dies mid-attempt, expiry consumes that claimed attempt. The sweeper applies the same M3
+budget/policy, scheduling another attempt or dead-lettering final exhaustion.
 This is why at-least-once is honest: the destination may have received the request before the worker died.
 
-**Replay.** `POST /v1/events/:id/replay` → requires the event to be `delivered`, `failed` or
-`dead_lettered` → sets `status=pending`, `next_attempt_at=now()`, increments `replay_count`, appends a
-`delivery_attempts` row with `attempt_no = attempt_count + 1`. `event_id` never changes. Duplicate
-suppression remains the consumer's job.
+**Replay (M4, not implemented).** The API must preserve `event_id`, payload and lifetime attempt history,
+guard terminal state/endpoint/replay version and start one bounded new delivery cycle atomically.
+The worker's next claim creates attempt `n+1`; replay itself does not create an HTTP attempt. Resolve
+cycle accounting, active/historical dead letters and upgrade compatibility under
+[proposed ADR 0006](adr/0006-m4-replay-and-inspection.md). There is no event status `failed`.
+Duplicate suppression remains the consumer's job.
 
 ---
 
@@ -350,7 +356,8 @@ Rules:
 
 ## 8. API surface
 
-Base: `/v1`. Auth: `Authorization: Bearer <api_key>` for management; HMAC header for ingestion.
+Base: `/v1`. Current management auth is `Authorization: Bearer <admin_token>` with one implicit tenant;
+API-key management is M5. Ingestion uses its HMAC header. M4 browser/session access is a proposed extension.
 Errors are RFC 9457 problem documents:
 
 ```json
@@ -364,9 +371,9 @@ Errors are RFC 9457 problem documents:
 | POST | `/v1/endpoints` | Bearer | Create endpoint, returns both secrets once |
 | GET | `/v1/endpoints` | Bearer | List endpoints |
 | GET | `/v1/endpoints/{id}` | Bearer | Get endpoint |
-| PATCH | `/v1/endpoints/{id}` | Bearer | Update url, enabled, max_attempts |
+| PATCH | `/v1/endpoints/{id}` | Bearer | M4 URL/enabled recovery; budget edits require an accepted cycle policy |
 | DELETE | `/v1/endpoints/{id}` | Bearer | Delete endpoint and its events |
-| GET | `/v1/events` | Bearer | Cursor-paginated list, filters: status, endpoint_id, from, to |
+| GET | `/v1/events` | Bearer | Cursor-paginated list: status, endpoint_id; from/to are planned additions |
 | GET | `/v1/events/{id}` | Bearer | Event detail |
 | GET | `/v1/events/{id}/attempts` | Bearer | Attempt history |
 | POST | `/v1/events/{id}/replay` | Bearer | Re-queue an event |
@@ -379,6 +386,9 @@ Errors are RFC 9457 problem documents:
 Implemented as of M2: the ingest path, `POST`/`GET /v1/endpoints`, `GET /v1/events`, `/healthz`,
 `/readyz` and `/metrics`. Every other row in this table is planned; see section 0 for the authoritative
 list.
+
+The response sketch below includes planned M5 idempotency and rate limiting. Current accepted ingest
+requests each create a new event with `202`; see section 9.5 for the existing ignored idempotency header.
 
 **Ingest request**
 
@@ -422,7 +432,7 @@ Outbound requests add `X-EventRelay-Event-Id`, `X-EventRelay-Attempt`, and `User
 
 ### 9.2 Retry schedule
 
-The full policy below is implemented on `feat/m3-implementation` per [ADR 0005](adr/0005-m3-retry-policy.md),
+The full policy below is implemented and merged into `main` per [ADR 0005](adr/0005-m3-retry-policy.md),
 replacing the M2 fixed 10-second delay. It preserves M2's enforcement of `max_attempts`, non-retryable
 failures, terminal dead letters and endpoint disabling on HTTP 410.
 
@@ -555,8 +565,8 @@ M2 adds `EVENTRELAY_ALLOW_PRIVATE_TARGETS` (false) and `EVENTRELAY_TRUSTED_PROXI
 `remote_addr` always records the socket peer. See ADR 0004. The HTTP timeout must be shorter than
 the lease. Responses are read up to 1 KiB and discarded; `response_excerpt` remains NULL.
 
-Never log secrets, full payloads (unless `EVENTRELAY_LOG_PAYLOADS=true` in development) or `Authorization`
-headers.
+Never log secrets, full payloads or `Authorization` headers. There is no payload-logging configuration
+override in the implemented configuration.
 
 ---
 
@@ -618,9 +628,9 @@ passed for the merged baseline. Local runs and remote CI are distinct evidence; 
 **Deliverable:** the documented backoff schedule, `Retry-After` support, DLQ with reason, sweeper for due
 events and expired leases.
 
-Status: implemented on `feat/m3-implementation`; acceptance evidence in the
-[M3 validation record](testing/m3-retry-policy.md). Not merged into `main`; remote checks are tracked in
-[the branch's CI runs](https://github.com/Shellghostt/EventRelay/actions?query=branch%3Afeat%2Fm3-implementation).
+Status: complete and merged through [PR #3](https://github.com/Shellghostt/EventRelay/pull/3).
+Acceptance evidence is in the [M3 validation record](testing/m3-retry-policy.md);
+[merged main CI](https://github.com/Shellghostt/EventRelay/actions/runs/43802341943) passed.
 The [audit correction record](testing/m3-audit-fixes.md) covers the five additional regressions and
 successful native Windows race and bounded load checks.
 
@@ -644,14 +654,21 @@ overrides require documented configuration and an ADR before implementation.
 ### M4 — Inspection, replay and dashboard
 
 **Deliverable:** event list/detail/attempt endpoints, replay, and a React dashboard showing endpoint
-health, recent events, attempt timelines and a replay button.
+delivery evidence, recent events, attempt timelines and a replay button, with guarded endpoint recovery.
+
+Status: **Not started; documentation prepared.** Follow [M4 requirements](phases/M4.md) and resolve
+[proposed ADR 0006](adr/0006-m4-replay-and-inspection.md) before dependent code. M3 lifetime attempt
+counts cannot simply be reused as an exhausted replay's scheduling budget.
 
 **Acceptance criteria**
 
-- [ ] Replay sets `status=pending`, keeps `event_id`, appends attempt `n+1`
-- [ ] Replay of an `in_flight` event returns `409`
-- [ ] Dashboard shows delivery success rate over the last 24 h from real data
-- [ ] Cursor pagination survives inserts during iteration (no duplicates, no gaps for older rows)
+- [ ] Replay preserves identity/history, starts a bounded new cycle and lets the next claim append attempt `n+1`
+- [ ] Concurrent/stale/in-flight replay, endpoint update/410 and disabled-state guards have real integration tests
+- [ ] M3 upgrade, counter bounds, stale leases and Redis interruption preserve attempts and terminal history
+- [ ] Secret-free detail/attempt APIs expose recorded facts and explicit unavailable response content
+- [ ] Dashboard shows a tested 24-hour observed success rate with explicit source/window/denominator
+- [ ] Cursor pagination survives inserts for unchanged older rows; live status changes are documented
+- [ ] Auth, frontend checks, safe rendering, pagination and polling cleanup pass, plus M1–M3/CI regressions
 - [ ] Dashboard has one screenshot in the README, taken from a real local run
 
 ### M5 — Tenancy, keys, limits, idempotency
@@ -710,11 +727,12 @@ PR-sized units, ordered. `ER-` prefix for issue titles.
 | ER-018 | `Retry-After` parsing (seconds and HTTP date) | ER-017 | M3 |
 | ER-019 | DLQ promotion and `dead_letters` writes | ER-017 | M3 |
 | ER-020 | Due-event sweeper | ER-017 | M3 |
-| ER-021 | `GET /v1/events/:id` and `/attempts` | ER-006 | M4 |
-| ER-022 | Replay endpoint with state guards | ER-021 | M4 |
+| ER-021 | Event detail, bounded attempts and observed statistics | ER-006, ER-020 | M4 |
+| ER-021A | Secret-free endpoint detail and guarded update/re-enable | ER-021 | M4 |
+| ER-022 | Delivery-cycle accounting, migration and guarded replay | ER-021, ER-021A | M4 |
 | ER-023 | Dashboard scaffolding and API client | ER-021 | M4 |
 | ER-024 | Endpoint health and event list views | ER-023 | M4 |
-| ER-025 | Attempt timeline and replay button | ER-024 | M4 |
+| ER-025 | Attempt timeline and replay button | ER-022, ER-024 | M4 |
 | ER-026 | API key creation, hashing, prefix lookup | ER-004 | M5 |
 | ER-027 | Tenant scoping middleware and leak tests | ER-026 | M5 |
 | ER-028 | Idempotency key handling | ER-005 | M5 |
@@ -850,7 +868,8 @@ events, how to restore from backup.
 **Open questions** (answer with an ADR before the relevant milestone):
 
 1. Should secrets be encrypted at rest with a KMS key, or is Postgres disk encryption sufficient for v1?
-2. Does replay reset `attempt_count`, or continue it? *Current answer: continue, so history stays linear.*
+2. How does replay preserve lifetime attempt history while resetting its scheduling budget? *Pending M4:
+   proposed ADR 0006 separates lifetime numbering from bounded delivery cycles; schema/cutover remain unresolved.*
 3. Is per-endpoint ordered delivery worth the head-of-line blocking in v1.0, or should it stay post-1.0?
 
 ---
@@ -861,7 +880,7 @@ This section exists because AI assistants and future maintainers routinely descr
 
 **Facts you may rely on:** ingestion, Redis dispatch and signed HTTP delivery are implemented.
 The worker uses fenced PostgreSQL leases, records attempts and recovers expired leases. M3 applies
-the documented backoff, jitter, Retry-After and stable terminal reasons on the feature branch;
+the documented backoff, jitter, Retry-After and stable terminal reasons in merged main;
 [audit corrections and verification](testing/m3-audit-fixes.md) are recorded locally. Inspection,
 replay, tenancy and UI remain future milestones.
 
@@ -875,7 +894,7 @@ exactly-once delivery, production readiness, or performance without a recorded r
 | tenant | Billing/ownership boundary. Has many endpoints. |
 | endpoint | A destination URL plus two secrets (ingest, delivery). |
 | event | One immutable payload accepted for one endpoint. Has one `event_id` forever. |
-| attempt | One HTTP request made while trying to deliver an event. Append-only. |
+| attempt | One committed delivery claim; recorded before HTTP and closed once, including interrupted claims. |
 | delivery | The overall lifecycle of an event from ingest to `delivered` or `dead_lettered`. |
 | replay | Re-queueing an existing event. Does not create a new event. |
 | dead letter | An event that exhausted attempts or hit a non-retryable status. |
@@ -896,6 +915,8 @@ For a new maintainer or a new AI session, in order:
 4. Check the milestone table in section 12 and the checkboxes inside the current milestone. Those checkboxes
    are the definition of done.
 5. Read `docs/adr/` before proposing a design change.
+   M4 preparation is in [phases/M4.md](phases/M4.md); ADR 0006 is still proposed, and implementation
+   must be separately requested. Preserve M3 policy/fencing and record accepted extensions before code.
 6. Pick the next unchecked item in the current milestone, in backlog order. Do not skip ahead to a later
    milestone, even if it looks more interesting.
 7. Before opening a PR: `make lint`, `make test`, update status fields, add the CHANGELOG line.

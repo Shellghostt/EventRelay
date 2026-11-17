@@ -6,7 +6,7 @@
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 ![Go](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)
 
-**Status: M2 merged into main; M3 implemented on `feat/m3-implementation`, not merged.** Signed events are stored durably and dispatched through Redis Streams to
+**Status: M1–M3 complete and merged into main.** Signed events are stored durably and dispatched through Redis Streams to
 independently scaled HTTP workers. Delivery is at least once: destinations must deduplicate by event ID.
 Retries follow the documented backoff schedule with jitter and `Retry-After`, and dead letters carry a
 stable terminal reason ([ADR 0005](docs/adr/0005-m3-retry-policy.md)).
@@ -26,8 +26,8 @@ can read end to end does not really exist as a mature open-source project. Event
 | Event ingestion and persistence | M1 | **Done** |
 | HMAC signature verification | M1 | **Done** |
 | Asynchronous delivery workers | M2 | **Done (merged)** |
-| Configurable retry policies | M3 | **Done** (feature branch; documented schedule, deliberately not configurable — ADR 0005) |
-| Full dead-letter policy and terminal reasons | M3 | **Done** (feature branch) |
+| Documented retry policy | M3 | **Done (merged)**; fixed schedule — ADR 0005 |
+| Full dead-letter policy and terminal reasons | M3 | **Done (merged)** |
 | Request inspection and delivery history | M4 | Not started |
 | Manual event replay | M4 | Not started |
 | API key management | M5 | Not started |
@@ -149,20 +149,22 @@ See [validation and limits](docs/testing/m1-m2-validation.md) before interpretin
 
 ## Roadmap
 
-M3 is implemented on `feat/m3-implementation` with recorded acceptance evidence
-([M3 validation record](docs/testing/m3-retry-policy.md)); it is not merged. Track remote checks in
-[the branch's CI runs](https://github.com/Shellghostt/EventRelay/actions?query=branch%3Afeat%2Fm3-implementation).
+M3 merged through [PR #3](https://github.com/Shellghostt/EventRelay/pull/3), with recorded
+[acceptance evidence](docs/testing/m3-retry-policy.md) and successful
+[main CI](https://github.com/Shellghostt/EventRelay/actions/runs/43802341943).
 The [audit correction record](docs/testing/m3-audit-fixes.md) covers five additional regressions
 and successful native Windows race and bounded load checks.
 Read the [M3 requirements and acceptance gates](docs/phases/M3.md) for the phase contract and
 the [development-tool audit](docs/DEVELOPMENT-TOOLS.md) before debugging.
+The [M4 requirements](docs/phases/M4.md) and [proposed replay/inspection ADR](docs/adr/0006-m4-replay-and-inspection.md)
+prepare the next phase; M4 implementation has not started.
 
 | Milestone | Deliverable | Status |
 |---|---|---|
 | M1 | HTTP ingestion API and durable event storage | **Done** (v0.1.0) |
 | M2 | Redis Streams transport, worker pool, horizontal scaling | **Done (merged)** |
-| M3 | Retry scheduler and dead-letter queue | **Done** (feature branch, not merged) |
-| M4 | Dashboard, request inspection and manual replay | Not started |
+| M3 | Retry scheduler and dead-letter queue | **Done (merged)** |
+| M4 | Dashboard, request inspection and manual replay | Not started; documents prepared |
 | M5 | Multi-tenancy, API keys, rate limits, idempotency | Not started |
 | M6 | Ordering options, tracing, backpressure, load test report, docs | Not started |
 

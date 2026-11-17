@@ -1,6 +1,6 @@
 # EventRelay Architecture
 
-**Status: M2 merged into main; M3 implemented on `feat/m3-implementation`, not merged.** Ingestion,
+**Status: M1–M3 complete and merged into main.** Ingestion,
 Redis transport, HTTP delivery and the M3 retry policy exist. Replay, tenancy and the dashboard remain
 planned. See [ADR 0004](adr/0004-m2-delivery.md) and [ADR 0005](adr/0005-m3-retry-policy.md).
 
@@ -40,7 +40,7 @@ failure behaviour of each stage.
 The implemented M2 path is API → PostgreSQL commit → bounded Redis stream → worker → signed HTTP.
 A lease and its attempt row are committed before HTTP begins. PostgreSQL fences completion with the
 random token, attempt number and lease expiry checked after acquiring the row lock. The attempt closes
-in the same transaction that marks delivery, schedules a fixed-delay retry or records a dead letter.
+in the same transaction that marks delivery, persists the M3 retry decision or records a dead letter.
 
 Each worker process runs a finite number of delivery goroutines and one sweeper. The sweeper closes
 expired attempts and republishes bounded pages of due events. Redis messages contain tenant/event IDs;
@@ -64,8 +64,16 @@ design.
 
 ## M3
 
-M3 (retry policy and dead-letter handling) is implemented on `feat/m3-implementation` under
+M3 (retry policy and dead-letter handling) is merged through
+[PR #3](https://github.com/Shellghostt/EventRelay/pull/3) under
 [ADR 0005](adr/0005-m3-retry-policy.md) with acceptance evidence in
-[testing/m3-retry-policy.md](testing/m3-retry-policy.md); it is not merged into `main`. The
+[testing/m3-retry-policy.md](testing/m3-retry-policy.md); the
 [phase requirements](phases/M3.md) hold the contract, and [development tools](DEVELOPMENT-TOOLS.md)
 record actual tooling coverage.
+
+## M4 preparation
+
+[M4 requirements](phases/M4.md) define inspection, endpoint recovery, replay and dashboard gates.
+[Proposed ADR 0006](adr/0006-m4-replay-and-inspection.md) separates replay budget from lifetime attempt
+history and records browser/query/concurrency decisions. M4 is not implemented; no response-content
+archive, proactive endpoint probe or M5 API-key system is introduced by this documentation.

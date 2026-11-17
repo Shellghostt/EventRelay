@@ -9,6 +9,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- [M4 preparation](docs/phases/M4.md) and [proposed ADR 0006](docs/adr/0006-m4-replay-and-inspection.md)
+  for inspection, endpoint recovery, bounded replay cycles and dashboard acceptance. Documentation only;
+  M4 remains not started. Current status now records the merged M3 PR and successful main CI.
 - [M3 requirements](docs/phases/M3.md) with phase boundaries, failure cases, ADR prerequisites and
   acceptance gates, plus a [development-tool audit](docs/DEVELOPMENT-TOOLS.md).
 - M3 retry policy and dead-letter handling (ER-017–ER-020, [ADR 0005](docs/adr/0005-m3-retry-policy.md)):
