@@ -37,8 +37,9 @@ M4 is **implemented and verified locally** on `feat/m4-implementation` under acc
 [ADR 0006](adr/0006-m4-replay-and-inspection.md). The [requirements](phases/M4.md),
 [usage/upgrade guide](guides/inspection-and-replay.md) and
 [validation record](testing/m4-inspection-replay-dashboard.md) document inspection, endpoint recovery,
-bounded replay cycles and the dashboard. Publication/branch CI and the physical Redis restart scenario
-remain pending; M4 has not been pushed or merged.
+bounded replay cycles and the dashboard. The branch is published; six of seven CI jobs passed, with the
+frontend dependency audit blocked by an unpatched Picomatch advisory. That gate and the physical Redis
+restart scenario remain open; M4 remains unmerged.
 
 Read this block first. It is the fastest way to know what is true about this repository right now.
 
@@ -47,10 +48,10 @@ project: EventRelay
 status: mvp                      # skeleton | mvp | v1 | maintenance
 version: 0.1.0
 builds: true
-functional: partial              # M1-M4 work; M4 publication and M5-M6 remain
+functional: partial              # M1-M4 work; M4 acceptance and M5-M6 remain
 m4_branch: feat/m4-implementation
-m4_validation: local
-m4_ci: pending
+m4_validation: local_and_six_ci_jobs
+m4_ci: blocked_frontend_dependency_audit
 
 implemented:
   - Redis Streams dispatch with durable PostgreSQL republication
@@ -718,10 +719,11 @@ overrides require documented configuration and an ADR before implementation.
 **Deliverable:** event list/detail/attempt endpoints, replay, and a React dashboard showing endpoint
 delivery evidence, recent events, attempt timelines and a replay button, with guarded endpoint recovery.
 
-Status: **Implemented and verified locally; publication/CI pending.** Follow the
+Status: **Implemented, verified locally and pushed; frontend CI blocked.** Follow the
 [M4 requirements](phases/M4.md), accepted [ADR 0006](adr/0006-m4-replay-and-inspection.md),
 [usage/upgrade guide](guides/inspection-and-replay.md) and
-[validation record](testing/m4-inspection-replay-dashboard.md). The physical Redis restart scenario is
+[validation record](testing/m4-inspection-replay-dashboard.md). Six of seven CI jobs passed; the frontend
+dependency audit is blocked by an unpatched Picomatch advisory. The physical Redis restart scenario is
 also open; reconnect-based durable replay recovery passed.
 
 **Acceptance criteria**
@@ -735,7 +737,7 @@ also open; reconnect-based durable replay recovery passed.
 - [x] Auth, frontend checks, safe rendering, pagination and polling cleanup pass, plus local M1–M3 regressions
 - [x] Dashboard has one screenshot in the README, taken from a real local run
 - [ ] Physical Redis container restart after accepted replay is verified (blocked/skipped; see validation record)
-- [ ] Final M4 branch CI passes after authorized publication
+- [ ] Final M4 branch CI passes (frontend dependency audit blocked; see validation record)
 
 ### M5 — Tenancy, keys, limits, idempotency
 
@@ -951,8 +953,9 @@ This section exists because AI assistants and future maintainers routinely descr
 The worker uses fenced PostgreSQL leases, records attempts and recovers expired leases. M3 applies
 the documented backoff, jitter, Retry-After and stable terminal reasons in merged main;
 [audit corrections and verification](testing/m3-audit-fixes.md) are recorded locally. M4 inspection,
-endpoint recovery, replay and UI are implemented with [local evidence](testing/m4-inspection-replay-dashboard.md);
-publication/CI are pending. Tenancy, API keys and production posture remain future milestones.
+endpoint recovery, replay and UI are implemented with [recorded evidence](testing/m4-inspection-replay-dashboard.md).
+The M4 branch is pushed; its frontend dependency audit remains blocked after six CI jobs passed.
+Tenancy, API keys and production posture remain future milestones.
 
 **Rules:** update implemented/not_implemented, README and CHANGELOG together. Never claim
 exactly-once delivery, production readiness, or performance without a recorded run.
@@ -986,7 +989,7 @@ For a new maintainer or a new AI session, in order:
    are the definition of done.
 5. Read `docs/adr/` before proposing a design change.
    M4 requirements/evidence are in [phases/M4.md](phases/M4.md); ADR 0006 is accepted. Preserve M3
-   policy/fencing, the cycle/cutover contracts and the remaining publication/acceptance gates.
+   policy/fencing, the cycle/cutover contracts and the remaining CI/acceptance gates.
 6. Pick the next unchecked item in the current milestone, in backlog order. Do not skip ahead to a later
    milestone, even if it looks more interesting.
 7. Before opening a PR: `make lint`, `make test`, update status fields, add the CHANGELOG line.

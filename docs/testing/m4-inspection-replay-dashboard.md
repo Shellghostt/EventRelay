@@ -3,8 +3,8 @@
 Measurements: 2026-11-17; final packaging/documentation checks: 2026-11-18.
 Branch: `feat/m4-implementation`.
 Implementation commit: `2d545c7`.
-Status: **implemented and verified locally; publication/branch CI pending**. The physical Redis
-container-restart scenario remains blocked/skipped. M4 is not merged or released.
+Status: **implemented and verified locally; branch published; frontend CI blocked**. Six of seven CI
+jobs passed. The physical Redis container-restart scenario remains blocked/skipped. M4 is not merged or released.
 
 Baseline: merged M3 `853486150244a008146e5c00b5c2749179b53da2`, followed by the M4 requirements commit
 `e214999db8ec4932f8499fbb0b213c0d04a2cd86` and accepted ADR commit `7a06c80`.
@@ -73,7 +73,7 @@ make VERSION=m4-local race
 | actionlint 1.7.12 | CI workflow passed validation |
 | `memguard run web/src --json --strict`, MemGuard 0.2.0 | **7 JS/TS files**, no issues or diagnostics |
 | `codegraph sync` / `codegraph status` | Existing index refreshed/up to date; no new index initialized |
-| Documentation links/whitespace | 11 Markdown files: 123 local links/anchors valid; staged diff passed whitespace validation |
+| Documentation links/whitespace | Publication update: 11 Markdown files, 125 local links/anchors valid; diff passed whitespace validation |
 
 The regular Go gates skip opt-in load scenarios unless their environment variables are set. The
 bounded load scenario was run separately below. Unit-only CI jobs skip real service tests without URLs;
@@ -86,8 +86,9 @@ license notices are emitted into the embedded assets with normalized line ending
 
 ## Acceptance mapping
 
-This table follows the checklist order in `docs/phases/M4.md`. Checked criteria have local evidence;
-the physical Redis restart and final branch CI criteria stay unchecked.
+This table follows the checklist order in `docs/phases/M4.md`. Checked criteria have recorded evidence;
+the physical Redis restart and final branch CI criteria stay unchecked. Local dependency results above
+precede the current npm audit failure recorded below.
 
 | Criterion | Named evidence | Status |
 |---|---|---|
@@ -102,7 +103,7 @@ the physical Redis restart and final branch CI criteria stay unchecked.
 | 9. Frontend/auth/accessibility/text/pagination/poll lifecycle | Eight Vitest tests and seven Chromium tests listed below; Go session/origin tests | Passed |
 | 10. M1–M3 integration/race/lint/build/destination/vulnerability regressions | Canonical Go gates with real URLs; existing delivery/signature/SSRF/fence/M3 suites; govulncheck | Passed locally |
 | 11. Implemented dashboard screenshot | `web/e2e/dashboard.spec.ts` captures `docs/images/dashboard-m4.png` from synthetic local fixtures; visually inspected | Passed |
-| 12. Final M4 branch CI and evidence mapping | Local evidence mapping exists; branch is unpublished and its CI has not run | Pending; checkbox open |
+| 12. Final M4 branch CI and evidence mapping | Push CI for `a176d83` passed six jobs; frontend dependency audit failed. See the branch CI record below. | Blocked; checkbox open |
 
 New integration tests are in [m4_test.go](../../tests/integration/m4_test.go) and
 [m4_upgrade_stats_test.go](../../tests/integration/m4_upgrade_stats_test.go). The exact UTC-boundary test
@@ -175,7 +176,35 @@ back. [The recorded plan](m4-statistics-query-plan.txt) used `attempts_finished`
 matching rows and completed in **221.701 ms**. The API returns unavailable at this size instead of a
 partial success rate. This one-endpoint local profile is not evidence for every production data distribution.
 
-## Cleanup and publication limits
+## Branch publication and CI
+
+The user authorized the feature-branch push on 2026-11-18 (local date). Commit
+`a176d83f95796dfdbf4338407d0f933f63035ead` was pushed to `origin/feat/m4-implementation` with upstream tracking.
+[Push CI 44153798480](https://github.com/Shellghostt/EventRelay/actions/runs/44153798480) completed with
+six successful jobs and one failure:
+
+| Job | Result |
+|---|---|
+| Build and test — Ubuntu, Windows and macOS (three jobs) | Passed vet, `go test -race -count=1 ./...` and build |
+| Integration tests — PostgreSQL and Redis | Passed real store/delivery tests under `-race` |
+| Lint | Passed |
+| Vulnerability scan | `govulncheck` passed |
+| Dashboard source, browser and dependency checks | Type/lint/eight unit tests/build/license checks passed; npm audit failed. Asset drift and Chromium checks were skipped after that failure. |
+
+The failing command is `npm audit --audit-level=moderate`. It reports five high-severity entries rooted
+in Picomatch 4.0.7, used by development tools Vite/Vitest through Picomatch, Tinyglobby and Fdir.
+[GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf) covers single-branch repeated
+extglob ReDoS; its metadata was updated at `2026-11-17T15:56:44Z`. A local `npm --prefix web audit --json`
+recheck reproduced the failure. On this publication check, the npm registry still lists 4.0.7 as the
+latest Picomatch release and the advisory has no first patched version. The
+[proposed upstream fix](https://github.com/micromatch/picomatch/pull/254) remains unmerged.
+The accepted tooling pins and security threshold are retained. The final branch CI checkbox remains open.
+
+This record identifies the implementation/publication run above. Documentation-only follow-ups run the
+same workflow; [current branch runs](https://github.com/Shellghostt/EventRelay/actions?query=branch%3Afeat%2Fm4-implementation)
+show their separate results. No M4 PR, merge or release was performed.
+
+## Cleanup and remaining validation limits
 
 Two earlier browser runs left synthetic schema/Redis fixtures when Windows terminated the server process
 tree before deferred cleanup finished. Their contents were inspected and only those identified fixtures
@@ -190,9 +219,9 @@ The real Redis client disconnect/reconnect integration test passed. The physical
 acceptance scenario remains skipped/open and was not attempted through a workaround.
 
 The four-process Compose 10k load test was not rerun for M4; the committed M2 result remains M2 evidence.
-No M4 Linux/macOS remote run or branch CI is claimed. The Ubuntu frontend/browser job, existing Go
-OS matrix, real integration job, lint and vulnerability jobs are prepared for authorized publication.
-No push, PR or merge was performed for this M4 feature.
+Remote Linux/macOS/Windows Go checks and real integration CI passed as recorded above. Remote frontend
+asset/browser checks did not run after the dependency audit failure; their passing local evidence remains
+separate from CI.
 
 On resuming work on 2026-11-18, Docker Desktop and the existing M4 test containers were already stopped.
 Docker Desktop was started for the final image build; the M4 PostgreSQL/Redis containers remain stopped,

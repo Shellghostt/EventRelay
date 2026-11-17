@@ -1,8 +1,9 @@
 # EventRelay Architecture
 
 **Status: M1–M3 merged; M4 implemented and verified locally.** M4 adds inspection, endpoint recovery,
-replay and an embedded dashboard on `feat/m4-implementation`; publication/CI are pending. Tenancy and
-API keys remain M5. See [ADR 0004](adr/0004-m2-delivery.md), [ADR 0005](adr/0005-m3-retry-policy.md)
+replay and an embedded dashboard on the published `feat/m4-implementation` branch. Its frontend
+dependency audit remains blocked; see the [validation record](testing/m4-inspection-replay-dashboard.md).
+Tenancy and API keys remain M5. See [ADR 0004](adr/0004-m2-delivery.md), [ADR 0005](adr/0005-m3-retry-policy.md)
 and accepted [ADR 0006](adr/0006-m4-replay-and-inspection.md).
 
 ## Context

@@ -1,6 +1,7 @@
 # M4 inspection, endpoint recovery and replay
 
-M4 is implemented and verified locally on `feat/m4-implementation`; publication/branch CI are pending.
+M4 is implemented and verified locally on the published `feat/m4-implementation` branch; its frontend
+dependency audit remains blocked and final acceptance is open.
 The [phase requirements](../phases/M4.md), accepted [ADR 0006](../adr/0006-m4-replay-and-inspection.md)
 and [validation record](../testing/m4-inspection-replay-dashboard.md) hold the contract and evidence.
 

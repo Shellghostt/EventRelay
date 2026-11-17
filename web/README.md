@@ -1,6 +1,7 @@
 # EventRelay dashboard
 
-The M4 console is implemented and verified locally; publication/branch CI are pending.
+The M4 console is implemented and verified locally on the published feature branch. Its CI dependency
+audit is blocked by an unpatched Picomatch advisory; see the validation record below.
 It uses React, TypeScript, Vite and repository-owned CSS. The Go API embeds committed assets from
 `internal/dashboard/dist` and serves them at `/dashboard/`.
 
@@ -25,7 +26,8 @@ Vite server, proxying `/dashboard/api` to the API at `127.0.0.1:8080`. Open its 
 The normal embedded dashboard needs only Go; Node is not used by either deployment binary or Docker build.
 
 CI installs the locked dependencies, runs these gates on Ubuntu and checks rebuilt assets against Git.
-The existing Go matrix consumes committed assets. CI has not run for this local M4 branch.
+The existing Go matrix consumes committed assets. The first M4 push CI passed all Go/backend jobs and
+frontend type/lint/unit/build/license checks, then failed the npm audit before asset/browser validation.
 
 ## Browser lifecycle and data
 

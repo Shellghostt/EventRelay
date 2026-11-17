@@ -17,8 +17,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Pinned frontend source, lockfile, embedded assets/license attribution, canonical Make targets and an
   Ubuntu browser/dependency CI job. [M4 local validation](docs/testing/m4-inspection-replay-dashboard.md)
   records Go/native Windows race, PostgreSQL/Redis, eight frontend unit tests, seven Chromium tests,
-  load/heap/query measurements and a real dashboard screenshot. Publication/branch CI and the physical
-  Redis restart scenario remain pending; no M4 merge or release is claimed.
+  load/heap/query measurements and a real dashboard screenshot. The M4 branch is published; six of seven
+  CI jobs passed, with the frontend dependency audit blocked by an unpatched Picomatch advisory.
+  That gate and the physical Redis restart scenario remain open; M4 is not merged or released.
 - [M3 requirements](docs/phases/M3.md) with phase boundaries, failure cases, ADR prerequisites and
   acceptance gates, plus a [development-tool audit](docs/DEVELOPMENT-TOOLS.md).
 - M3 retry policy and dead-letter handling (ER-017–ER-020, [ADR 0005](docs/adr/0005-m3-retry-policy.md)):

@@ -2,7 +2,7 @@
 
 > Self-hosted webhook infrastructure with reliable delivery, event replay, retries and observability.
 
-![status](https://img.shields.io/badge/status-M4_verified_locally-blue)
+![status](https://img.shields.io/badge/status-M4_CI_blocked-orange)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 ![Go](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)
 
@@ -11,7 +11,9 @@ independently scaled HTTP workers. Delivery is at least once: destinations must 
 Retries follow the documented backoff schedule with jitter and `Retry-After`, and dead letters carry a
 stable terminal reason ([ADR 0005](docs/adr/0005-m3-retry-policy.md)).
 M4 inspection, endpoint recovery, guarded replay and the React dashboard are implemented and verified
-locally on `feat/m4-implementation`; publication and branch CI are pending.
+locally on the published `feat/m4-implementation` branch. Six of seven CI jobs passed; the frontend
+dependency audit is blocked by an unpatched Picomatch advisory. See the
+[validation record](docs/testing/m4-inspection-replay-dashboard.md#branch-publication-and-ci).
 
 ## Why this exists
 
@@ -187,15 +189,17 @@ the [development-tool audit](docs/DEVELOPMENT-TOOLS.md) before debugging.
 M4 follows the updated [phase requirements](docs/phases/M4.md) and accepted
 [replay/inspection ADR](docs/adr/0006-m4-replay-and-inspection.md). Its
 [local validation](docs/testing/m4-inspection-replay-dashboard.md) includes native Windows race,
-real PostgreSQL/Redis integration, browser checks and a bounded load regression. M4 branch CI and the
-physical Redis container-restart scenario remain open; M4 has not been pushed or merged.
+real PostgreSQL/Redis integration, browser checks and a bounded load regression. The
+[recorded branch CI](https://github.com/Shellghostt/EventRelay/actions/runs/44153798480) passed all six
+Go/backend jobs but failed the frontend dependency audit. That gate and the physical Redis
+container-restart scenario remain open; M4 is published on its feature branch and remains unmerged.
 
 | Milestone | Deliverable | Status |
 |---|---|---|
 | M1 | HTTP ingestion API and durable event storage | **Done** (v0.1.0) |
 | M2 | Redis Streams transport, worker pool, horizontal scaling | **Done (merged)** |
 | M3 | Retry scheduler and dead-letter queue | **Done (merged)** |
-| M4 | Dashboard, request inspection and manual replay | **Implemented; verified locally; publication/CI pending** |
+| M4 | Dashboard, request inspection and manual replay | **Implemented; pushed; frontend CI blocked** |
 | M5 | Multi-tenancy, API keys, rate limits, idempotency | Not started |
 | M6 | Ordering options, tracing, backpressure, load test report, docs | Not started |
 
