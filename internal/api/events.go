@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,8 +19,8 @@ type eventResponse struct {
 	EventType     string          `json:"event_type"`
 	Payload       json.RawMessage `json:"payload"`
 	Status        string          `json:"status"`
-	AttemptCount  int16           `json:"attempt_count"`
-	ReplayCount   int16           `json:"replay_count"`
+	AttemptCount  int32           `json:"attempt_count"`
+	ReplayCount   int32           `json:"replay_count"`
 	NextAttemptAt time.Time       `json:"next_attempt_at"`
 	ReceivedAt    time.Time       `json:"received_at"`
 	DeliveredAt   *time.Time      `json:"delivered_at,omitempty"`
@@ -52,10 +53,35 @@ var validStatuses = map[string]bool{
 
 func (s *server) listEvents(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	view := query.Get("view")
+	if view != "" && view != "summary" {
+		writeProblem(w, 422, "invalid-view", "Invalid view", "view must be summary when provided.")
+		return
+	}
+	summary := view == "summary" || strings.HasPrefix(r.URL.Path, "/dashboard/api/")
 
 	filter := store.EventFilter{
 		Status: query.Get("status"),
 		Limit:  50,
+	}
+	for _, name := range []string{"from", "to"} {
+		if query.Has(name) {
+			t, err := time.Parse(time.RFC3339, query.Get(name))
+			if err != nil {
+				writeProblem(w, 422, "invalid-time-filter", "Invalid time filter", "from/to must be RFC3339 instants.")
+				return
+			}
+			t = t.UTC()
+			if name == "from" {
+				filter.From = &t
+			} else {
+				filter.To = &t
+			}
+		}
+	}
+	if filter.From != nil && filter.To != nil && !filter.From.Before(*filter.To) {
+		writeProblem(w, 422, "invalid-time-filter", "Invalid time range", "from must precede to; the window includes from and excludes to.")
+		return
 	}
 
 	if filter.Status != "" && !validStatuses[filter.Status] {
@@ -84,7 +110,30 @@ func (s *server) listEvents(w http.ResponseWriter, r *http.Request) {
 		filter.Limit = n
 	}
 
-	cursor, err := decodeCursor(query.Get("cursor"))
+	bound := summary || filter.From != nil || filter.To != nil
+	// Bind parsed filters, so equivalent RFC3339 representations share a scope
+	// and an arbitrarily long fractional-second spelling cannot inflate a cursor.
+	endpointScope, fromScope, toScope := "", "", ""
+	if filter.EndpointID != nil {
+		endpointScope = filter.EndpointID.String()
+	}
+	if filter.From != nil {
+		fromScope = filter.From.UTC().Format(time.RFC3339Nano)
+	}
+	if filter.To != nil {
+		toScope = filter.To.UTC().Format(time.RFC3339Nano)
+	}
+	scope := cursorScope(r.URL.Path, map[string]string{"view": view, "status": filter.Status, "endpoint_id": endpointScope, "from": fromScope, "to": toScope})
+	encodedCursor := query.Get("cursor")
+	var err error
+	if bound {
+		encodedCursor, err = s.decodeBoundCursor(encodedCursor, scope)
+	}
+	if err != nil {
+		writeProblem(w, 422, "invalid-cursor", "Invalid cursor", "The cursor must match this route and its filters.")
+		return
+	}
+	cursor, err := decodeCursor(encodedCursor)
 	if err != nil {
 		writeProblem(w, http.StatusUnprocessableEntity, "invalid-cursor", "Invalid cursor",
 			"The cursor is not a value returned by this API.")
@@ -92,10 +141,33 @@ func (s *server) listEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	filter.Before = cursor
 
-	events, next, err := s.store.ListEvents(r.Context(), uuid.MustParse(store.DefaultTenantID), filter)
+	ctx, cancel := contextWithTimeout(r, store.InspectionTimeout)
+	defer cancel()
+	var events []store.Event
+	var next *store.Cursor
+	if summary {
+		events, next, err = s.store.ListEventSummaries(ctx, uuid.MustParse(store.DefaultTenantID), filter)
+	} else {
+		events, next, err = s.store.ListEvents(ctx, uuid.MustParse(store.DefaultTenantID), filter)
+	}
 	if err != nil {
-		s.log.Error("list events", "error", err)
-		writeProblem(w, http.StatusInternalServerError, "internal", "Internal error", "")
+		s.inspectionError(w, err)
+		return
+	}
+	var nextCursor *string
+	if next != nil {
+		encoded := encodeCursor(*next)
+		if bound {
+			encoded = s.encodeBoundCursor(scope, encoded)
+		}
+		nextCursor = &encoded
+	}
+	if summary {
+		out := make([]eventSummaryResponse, 0, len(events))
+		for _, e := range events {
+			out = append(out, toEventSummary(e))
+		}
+		inspectionJSON(w, 200, map[string]any{"events": out, "next_cursor": nextCursor})
 		return
 	}
 
@@ -105,10 +177,10 @@ func (s *server) listEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := map[string]any{"events": out}
-	if next != nil {
-		response["next_cursor"] = encodeCursor(*next)
+	response["next_cursor"] = nextCursor
+	if bound {
+		inspectionJSON(w, 200, response)
 	} else {
-		response["next_cursor"] = nil
+		httpx.JSON(w, http.StatusOK, response)
 	}
-	httpx.JSON(w, http.StatusOK, response)
 }

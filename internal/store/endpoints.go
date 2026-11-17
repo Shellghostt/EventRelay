@@ -26,6 +26,7 @@ type Endpoint struct {
 	Ordered        bool
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	Revision       int32
 }
 
 // CreateEndpointInput is the caller-supplied part of an endpoint.
@@ -40,7 +41,7 @@ type CreateEndpointInput struct {
 
 const endpointColumns = `
 	id::text, tenant_id::text, url, description, enabled,
-	max_attempts, ordered, created_at, updated_at`
+	max_attempts, ordered, created_at, updated_at, revision`
 
 // CreateEndpoint inserts an endpoint and returns it, secrets included.
 func (s *Store) CreateEndpoint(ctx context.Context, in CreateEndpointInput) (Endpoint, error) {
@@ -55,7 +56,7 @@ func (s *Store) CreateEndpoint(ctx context.Context, in CreateEndpointInput) (End
 
 	err := row.Scan(
 		&out.ID, &out.TenantID, &out.URL, &out.Description, &out.Enabled,
-		&out.MaxAttempts, &out.Ordered, &out.CreatedAt, &out.UpdatedAt,
+		&out.MaxAttempts, &out.Ordered, &out.CreatedAt, &out.UpdatedAt, &out.Revision,
 	)
 	if err != nil {
 		return Endpoint{}, fmt.Errorf("insert endpoint: %w", err)
@@ -86,7 +87,7 @@ func (s *Store) ListEndpoints(ctx context.Context, tenantID uuid.UUID) ([]Endpoi
 		var e Endpoint
 		if err := rows.Scan(
 			&e.ID, &e.TenantID, &e.URL, &e.Description, &e.Enabled,
-			&e.MaxAttempts, &e.Ordered, &e.CreatedAt, &e.UpdatedAt,
+			&e.MaxAttempts, &e.Ordered, &e.CreatedAt, &e.UpdatedAt, &e.Revision,
 		); err != nil {
 			return nil, fmt.Errorf("scan endpoint: %w", err)
 		}
@@ -111,7 +112,7 @@ func (s *Store) EndpointByID(ctx context.Context, id uuid.UUID) (Endpoint, error
 	row := s.pool.QueryRow(ctx, q, id.String())
 	err := row.Scan(
 		&e.ID, &e.TenantID, &e.URL, &e.Description, &e.Enabled,
-		&e.MaxAttempts, &e.Ordered, &e.CreatedAt, &e.UpdatedAt,
+		&e.MaxAttempts, &e.Ordered, &e.CreatedAt, &e.UpdatedAt, &e.Revision,
 		&e.IngestSecret, &e.DeliverySecret,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {

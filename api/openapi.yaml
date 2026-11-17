@@ -9,9 +9,12 @@ info:
     field before it works is treated as a documentation bug (see
     docs/PLAN.md section 20).
 
-    Two authentication schemes exist and they are not interchangeable:
+    Authentication mechanisms are not interchangeable:
       * Management endpoints use a bearer token.
       * Ingest uses an HMAC signature over the raw request body.
+      * The browser console uses a restricted HttpOnly session plus CSRF nonce.
+        Its routes are described in dashboard.openapi.yaml; cookies do not
+        authorize this bearer API or ingestion.
 servers:
   - url: http://localhost:8080
     description: Local development
@@ -81,10 +84,16 @@ paths:
     get:
       tags: [Endpoints]
       summary: List endpoints
-      description: Secrets are never included in list responses.
+      description: |
+        Secrets are never included. With no limit/cursor the original unpaginated
+        response is preserved. Providing either enables bounded descending
+        (created_at,id) pages with a route/tenant-bound cursor and next_cursor.
       operationId: listEndpoints
       security:
         - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/BoundCursor"
       responses:
         "200":
           description: Endpoints for the current tenant
@@ -197,10 +206,23 @@ paths:
       description: |
         Ordered by `received_at DESC, id DESC`. Pagination is cursor-based;
         pass `next_cursor` back as `cursor`. Never use an offset.
+        The original response includes payloads. view=summary omits them.
+        from/to are ordered RFC3339 instants, with inclusive from/exclusive to.
+        Summary/time-filtered cursors bind route, tenant and all filters; legacy
+        cursors remain compatible. Status changes affect live list membership.
       operationId: listEvents
       security:
         - bearerAuth: []
       parameters:
+        - name: view
+          in: query
+          schema: {type: string, enum: [summary]}
+        - name: from
+          in: query
+          schema: {type: string, format: date-time}
+        - name: to
+          in: query
+          schema: {type: string, format: date-time}
         - name: status
           in: query
           schema:
@@ -233,14 +255,191 @@ paths:
                 properties:
                   events:
                     type: array
+                    maxItems: 200
                     items:
-                      $ref: "#/components/schemas/Event"
+                      oneOf:
+                        - $ref: "#/components/schemas/Event"
+                        - $ref: "#/components/schemas/EventSummary"
                   next_cursor:
                     type: [string, "null"]
         "401":
           $ref: "#/components/responses/Unauthorized"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
+
+  /v1/events/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ResourceID"
+    get:
+      tags: [Events]
+      summary: Inspect a stored event and its current cycle
+      operationId: inspectEvent
+      security: [{bearerAuth: []}]
+      description: |
+        Tenant-scoped. Payload is available up to 512 KiB; larger payloads return
+        null and an explicit unavailable reason. Diagnostics are capped at 2,048
+        characters. New inspection reads have two-second deadlines and 1 MiB
+        response bounds. Missing and foreign IDs return identical 404 problems.
+      responses:
+        "200":
+          description: Current stored state
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EventDetail"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "503": {$ref: "#/components/responses/InspectionUnavailable"}
+
+  /v1/events/{id}/attempts:
+    parameters:
+      - $ref: "#/components/parameters/ResourceID"
+      - $ref: "#/components/parameters/PageLimit"
+      - $ref: "#/components/parameters/BoundCursor"
+    get:
+      tags: [Events]
+      summary: Page persisted lifetime attempts in ascending attempt order
+      operationId: inspectAttempts
+      security: [{bearerAuth: []}]
+      description: |
+        In-flight attempts keep nullable finish/status/duration fields. Destination
+        bodies and headers were never captured and remain explicitly unavailable.
+        Cursors cannot be reused for another event, route or tenant.
+      responses:
+        "200":
+          description: Stable ordered attempt page
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AttemptPage"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/UnprocessableEntity"}
+        "503": {$ref: "#/components/responses/InspectionUnavailable"}
+
+  /v1/events/{id}/cycles:
+    parameters:
+      - $ref: "#/components/parameters/ResourceID"
+      - $ref: "#/components/parameters/PageLimit"
+      - $ref: "#/components/parameters/BoundCursor"
+    get:
+      tags: [Events]
+      summary: Page previous completed cycles in ascending cycle order
+      operationId: inspectCycles
+      security: [{bearerAuth: []}]
+      responses:
+        "200":
+          description: Prior cycle history archived by replay
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CyclePage"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/UnprocessableEntity"}
+        "503": {$ref: "#/components/responses/InspectionUnavailable"}
+
+  /v1/events/{id}/replay:
+    parameters:
+      - $ref: "#/components/parameters/ResourceID"
+    post:
+      tags: [Events]
+      summary: Start a guarded delivery cycle under the same event ID
+      operationId: replayEvent
+      security: [{bearerAuth: []}]
+      description: |
+        Only delivered/dead_lettered, owned events with no lease and an enabled
+        endpoint qualify. The expected replay count must match. Requires integer
+        capacity for the entire new frozen 1–20 attempt budget. Archives the prior
+        cycle, removes active DLQ membership, advances once and persists the due
+        time atomically. Creates no HTTP attempt. Redis publication is unnecessary
+        for acceptance; durable sweeps resume dispatch after Redis returns.
+        A previously delivered event can repeat a destination effect. Never
+        automatically retry a stale/conflicting mutation with a newer version.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReplayRequest"}
+      responses:
+        "202":
+          description: Durable pending state and fresh cycle budget
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EventSummary"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/StateConflict"}
+        "422": {$ref: "#/components/responses/UnprocessableEntity"}
+        "503": {$ref: "#/components/responses/InspectionUnavailable"}
+
+  /v1/endpoints/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ResourceID"
+    get:
+      tags: [Endpoints]
+      summary: Inspect endpoint configuration without secrets or a probe
+      operationId: inspectEndpoint
+      security: [{bearerAuth: []}]
+      responses:
+        "200":
+          description: Owned endpoint configuration
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Endpoint"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "503": {$ref: "#/components/responses/InspectionUnavailable"}
+    patch:
+      tags: [Endpoints]
+      summary: Correct or re-enable an endpoint at its expected revision
+      operationId: updateEndpoint
+      security: [{bearerAuth: []}]
+      description: |
+        Only URL/enabled are editable; budgets and secrets are not. Every operator
+        PATCH advances revision. A 410 from a claim at an older revision cannot
+        disable this corrected configuration. URL validation sends no probe;
+        delivery-time SSRF checks still apply. Disabling retains pending events
+        and existing leases; re-enabling allows durable dispatch to resume.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/EndpointPatch"}
+      responses:
+        "200":
+          description: New endpoint revision
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Endpoint"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/StateConflict"}
+        "422": {$ref: "#/components/responses/UnprocessableEntity"}
+        "503": {$ref: "#/components/responses/InspectionUnavailable"}
+
+  /v1/endpoints/{id}/stats:
+    parameters:
+      - $ref: "#/components/parameters/ResourceID"
+    get:
+      tags: [Endpoints]
+      summary: Observe finished HTTP attempt success in a database UTC window
+      operationId: inspectEndpointStatistics
+      security: [{bearerAuth: []}]
+      description: |
+        Window is [database-now − 24h, database-now). Numerator counts successful
+        HTTP-response attempts; denominator counts all received HTTP responses,
+        including broken-body network outcomes and replay cycles. No responses
+        are separate; zero denominator yields null. Failure category counts can
+        overlap. Reads at most 100,001 matching attempts; above 100,000 returns
+        available=false and null aggregates. These are observed attempts, not
+        synthetic probes, unique-event probabilities or future availability.
+      responses:
+        "200":
+          description: Complete bounded aggregate or an explicit unavailable state
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EndpointStatistics"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "503": {$ref: "#/components/responses/InspectionUnavailable"}
 
 components:
   securitySchemes:
@@ -252,6 +451,16 @@ components:
         keys in M5.
 
   responses:
+    StateConflict:
+      description: state-conflict; stale version, invalid current state or counter capacity guard
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problem"}
+    InspectionUnavailable:
+      description: inspection-timeout or inspection-response-too-large; retry the read or request a smaller page
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problem"}
     Unauthorized:
       description: Missing or invalid bearer token
       content:
@@ -270,6 +479,22 @@ components:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
+
+  parameters:
+    ResourceID:
+      name: id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    PageLimit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+    BoundCursor:
+      name: cursor
+      in: query
+      description: Opaque HMAC-bound route/tenant/filter position returned as next_cursor
+      schema: {type: string, maxLength: 2048}
 
   schemas:
     Problem:
@@ -307,7 +532,7 @@ components:
 
     Endpoint:
       type: object
-      required: [id, url, description, enabled, max_attempts, created_at]
+      required: [id, url, description, enabled, max_attempts, created_at, revision]
       properties:
         id:
           type: string
@@ -321,6 +546,13 @@ components:
           type: boolean
         max_attempts:
           type: integer
+          minimum: 1
+          maximum: 20
+        revision:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 2147483647
         created_at:
           type: string
           format: date-time
@@ -359,8 +591,14 @@ components:
           enum: [pending, in_flight, delivered, dead_lettered, canceled]
         attempt_count:
           type: integer
+          format: int32
+          minimum: 0
+          maximum: 2147483647
         replay_count:
           type: integer
+          format: int32
+          minimum: 0
+          maximum: 2147483647
         next_attempt_at:
           type: string
           format: date-time
@@ -372,3 +610,127 @@ components:
           format: date-time
         last_error:
           type: string
+
+    ReplayRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_replay_count]
+      properties:
+        expected_replay_count: {type: integer, format: int32, minimum: 0, maximum: 2147483647}
+
+    EndpointPatch:
+      type: object
+      additionalProperties: false
+      required: [expected_revision]
+      anyOf:
+        - required: [url]
+        - required: [enabled]
+      properties:
+        expected_revision: {type: integer, format: int32, minimum: 1, maximum: 2147483647}
+        url: {type: string, format: uri, maxLength: 2048}
+        enabled: {type: boolean}
+
+    EventSummary:
+      type: object
+      description: Payload-free current delivery metadata; one cycle budget is independent of lifetime count.
+      required: [id, endpoint_id, event_type, status, attempt_count, replay_count, cycle_attempt_count, cycle_max_attempts, received_at, next_attempt_at, last_error_truncated]
+      properties:
+        id: {type: string, format: uuid}
+        endpoint_id: {type: string, format: uuid}
+        event_type: {type: string}
+        status: {type: string, enum: [pending, in_flight, delivered, dead_lettered, canceled]}
+        attempt_count: {type: integer, format: int32, minimum: 0, maximum: 2147483647}
+        replay_count: {type: integer, format: int32, minimum: 0, maximum: 2147483647}
+        cycle_attempt_count: {type: integer, minimum: 0, maximum: 20}
+        cycle_max_attempts: {type: integer, minimum: 1, maximum: 20}
+        cycle_started_at: {type: string, format: date-time}
+        cycle_finished_at: {type: [string, "null"], format: date-time}
+        next_attempt_at: {type: [string, "null"], format: date-time, description: Present only while pending; otherwise null.}
+        received_at: {type: string, format: date-time}
+        delivered_at: {type: [string, "null"], format: date-time}
+        last_error: {type: string, maxLength: 2048}
+        last_error_truncated: {type: boolean}
+
+    EventDetail:
+      allOf:
+        - $ref: "#/components/schemas/EventSummary"
+        - type: object
+          required: [payload, payload_available, payload_bytes, payload_unavailable_reason, terminal_reason]
+          properties:
+            payload: {description: Stored JSON up to 512 KiB; null when too large.}
+            payload_available: {type: boolean}
+            payload_bytes: {type: integer, minimum: 0}
+            payload_unavailable_reason: {type: [string, "null"], enum: [payload_limit_exceeded, null]}
+            terminal_reason: {$ref: "#/components/schemas/TerminalReason"}
+
+    TerminalReason:
+      type: [string, "null"]
+      enum: [attempts_exhausted, non_retryable_response, non_retryable_policy, null]
+
+    Attempt:
+      type: object
+      required: [attempt_no, cycle_no, cycle_attempt_no, started_at, finished_at, outcome, response_status, duration_ms, error, error_truncated, endpoint_revision, response_excerpt, response_body_available, response_headers_available]
+      properties:
+        attempt_no: {type: integer, format: int32, minimum: 1, maximum: 2147483647}
+        cycle_no: {type: integer, format: int32, minimum: 0}
+        cycle_attempt_no: {type: integer, minimum: 1, maximum: 20}
+        endpoint_revision: {type: [integer, "null"], description: Null for unknown pre-M4 endpoint revisions.}
+        started_at: {type: string, format: date-time}
+        finished_at: {type: [string, "null"], format: date-time}
+        outcome: {type: string}
+        response_status: {type: [integer, "null"]}
+        duration_ms: {type: [integer, "null"]}
+        error: {type: [string, "null"], maxLength: 2048}
+        error_truncated: {type: boolean}
+        response_excerpt: {type: "null"}
+        response_body_available: {type: boolean, const: false}
+        response_headers_available: {type: boolean, const: false}
+
+    AttemptPage:
+      type: object
+      required: [attempts, next_cursor]
+      properties:
+        attempts: {type: array, maxItems: 200, items: {$ref: "#/components/schemas/Attempt"}}
+        next_cursor: {type: [string, "null"], maxLength: 2048}
+
+    DeliveryCycle:
+      type: object
+      required: [cycle_no, final_status, terminal_reason, attempt_count, max_attempts, started_at, finished_at, replayed_at]
+      properties:
+        cycle_no: {type: integer, minimum: 0}
+        final_status: {type: string, enum: [delivered, dead_lettered]}
+        terminal_reason: {$ref: "#/components/schemas/TerminalReason"}
+        attempt_count: {type: integer, minimum: 0, maximum: 20}
+        max_attempts: {type: integer, minimum: 1, maximum: 20}
+        first_attempt_no: {type: [integer, "null"]}
+        last_attempt_no: {type: [integer, "null"]}
+        started_at: {type: string, format: date-time}
+        finished_at: {type: [string, "null"], format: date-time, description: Unknown M3 finish timestamps stay null.}
+        replayed_at: {type: string, format: date-time}
+        last_error: {type: [string, "null"], maxLength: 2048}
+        last_error_truncated: {type: boolean}
+
+    CyclePage:
+      type: object
+      required: [cycles, next_cursor]
+      properties:
+        cycles: {type: array, maxItems: 200, items: {$ref: "#/components/schemas/DeliveryCycle"}}
+        next_cursor: {type: [string, "null"], maxLength: 2048}
+
+    EndpointStatistics:
+      type: object
+      required: [available, unavailable_reason, window_from, window_to, attempt_limit, success_http_attempts, http_response_attempts, no_response_attempts, network_attempts, timeout_attempts, policy_attempts, lease_expired_attempts, success_rate]
+      properties:
+        available: {type: boolean}
+        unavailable_reason: {type: [string, "null"], enum: [attempt_limit_exceeded, null]}
+        window_from: {type: string, format: date-time}
+        window_to: {type: string, format: date-time}
+        attempt_limit: {type: integer, const: 100000}
+        success_http_attempts: {type: [integer, "null"], minimum: 0}
+        http_response_attempts: {type: [integer, "null"], minimum: 0}
+        no_response_attempts: {type: [integer, "null"], minimum: 0}
+        network_attempts: {type: [integer, "null"], minimum: 0}
+        timeout_attempts: {type: [integer, "null"], minimum: 0}
+        policy_attempts: {type: [integer, "null"], minimum: 0, description: Final attempts with a persisted current/prior cycle policy reason.}
+        lease_expired_attempts: {type: [integer, "null"], minimum: 0}
+        success_rate: {type: [number, "null"], minimum: 0, maximum: 1}

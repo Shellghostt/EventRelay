@@ -14,6 +14,60 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Go jobs consume committed assets; this job rebuilds and validates their source.
+  frontend:
+    name: Dashboard source, browser and dependency checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: eventrelay
+          POSTGRES_PASSWORD: eventrelay
+          POSTGRES_DB: eventrelay
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U eventrelay -d eventrelay"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7.2-alpine
+        ports:
+          - 6379/tcp
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.22.3'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install locked dependencies
+        run: make frontend-install
+      - name: Type, lint, unit, build, license and vulnerability gates
+        run: make frontend-check
+      - name: Reproducible embedded assets
+        run: git diff --exit-code -- internal/dashboard/dist
+      - name: Install Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Real dashboard browser checks
+        env:
+          EVENTRELAY_TEST_REDIS_URL: redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}/0
+          EVENTRELAY_TEST_DATABASE_URL: postgres://eventrelay:eventrelay@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/eventrelay?sslmode=disable
+        run: make frontend-browser
+
   test:
     name: Build and test
     runs-on: ${{ matrix.os }}
