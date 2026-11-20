@@ -240,6 +240,21 @@ Native `make race` passed all packages (integration **47.183 s**); `make build` 
 with CGO disabled, and `govulncheck ./...` reported **No vulnerabilities found**. Actionlint 1.7.12
 accepted the updated workflow. Final updated-branch GitHub results remain pending publication.
 
+The first recheck CI on `1555e2f` passed the full dashboard source/audit/assets/browser job and all
+three native Go jobs, lint and vulnerability scanning. Its new physical restart case exposed a fixture
+assumption: Docker reassigns randomly published host ports when a container is stopped/started.
+Redis was ready on its new port while the fixture kept dialing the old one. This is recorded in
+[PR CI 44764205278](https://github.com/Shellghostt/EventRelay/actions/runs/44764205278) and
+[push CI 44764192605](https://github.com/Shellghostt/EventRelay/actions/runs/44764192605).
+
+The corrected test rediscovers only the same verified container's compatible loopback mapping.
+It retains the original client when the mapping is stable and creates a new fixture client when the
+port changes. Native race rechecks passed both paths: fixed port **56386 → 56386**, **2.88 s**
+(package **4.007 s**), and random port **51224 → 10903**, **2.69 s** (package **3.809 s**).
+Both retained the same event/payload, original attempt/cycle/reason, one accepted replay and exactly
+one destination delivery. The corrected source passed `make lint` with **0 issues**. Final CI reruns
+the corrected test; its result remains pending until the new branch head completes.
+
 Reproduce the separate physical test against disposable services:
 
 ```powershell

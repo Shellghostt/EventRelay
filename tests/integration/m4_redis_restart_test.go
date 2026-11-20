@@ -6,18 +6,21 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
 	"reflect"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/shellghostt/eventrelay/internal/retry"
 	"github.com/shellghostt/eventrelay/internal/store"
+	"github.com/shellghostt/eventrelay/internal/stream"
 	"github.com/shellghostt/eventrelay/internal/worker"
 	"github.com/shellghostt/eventrelay/tests/testutil"
 )
@@ -84,7 +87,7 @@ func TestM4ReplayAcrossRedisContainerRestart(t *testing.T) {
 	if err := h.Stream.Publish(ctx, store.Dispatch{TenantID: e.TenantID, EventID: e.ID}); err != nil {
 		t.Fatal(err)
 	}
-	m4RedisDocker(t, id, "stop", "--time", "1")
+	m4RedisDocker(t, id, "stop", "--timeout", "1")
 	if m4InspectRedisContainer(t, id).State.Running {
 		t.Fatal("Redis container did not stop")
 	}
@@ -103,11 +106,32 @@ func TestM4ReplayAcrossRedisContainerRestart(t *testing.T) {
 	}
 
 	m4RedisDocker(t, id, "start")
-	m4WaitForRedis(t, h)
 	after := m4InspectRedisContainer(t, id)
 	if !after.State.Running || after.State.StartedAt == before.State.StartedAt {
 		t.Fatal("Redis did not acquire a new container start time")
 	}
+	// Docker can assign a different host port when a randomly published service
+	// restarts. Reconnect only to a port belonging to this same verified container.
+	restoredURL := m4RedisURLAfterRestart(t, after, h.RedisURL)
+	m4CheckRedisContainer(t, after, id, restoredURL)
+	if restoredURL != h.RedisURL {
+		if err := h.Stream.Close(); err != nil {
+			t.Fatal(err)
+		}
+		restored, err := stream.Open(restoredURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		restored.Key = h.Stream.Key
+		h.Stream, h.RedisURL = restored, restoredURL
+		t.Cleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = restored.Client.Del(cleanupCtx, restored.Key).Err()
+			_ = restored.Close()
+		})
+	}
+	m4WaitForRedis(t, h)
 	// Remove only this fixture's notification/group after the real restart so
 	// recovery must use PostgreSQL even when Redis AOF preserved the notification.
 	if err := h.Stream.Client.Del(ctx, h.Stream.Key).Err(); err != nil {
@@ -139,6 +163,7 @@ func TestM4ReplayAcrossRedisContainerRestart(t *testing.T) {
 		t.Fatal("no real replay delivery was observed")
 	}
 	t.Logf("Redis stopped and started: %s -> %s; replay_count=1, lifetime_attempts=2, retained_cycles=1, destination_calls=1", before.State.StartedAt, after.State.StartedAt)
+	t.Logf("Redis published ports: %v -> %v", before.NetworkSettings.Ports["6379/tcp"], after.NetworkSettings.Ports["6379/tcp"])
 }
 
 type m4RedisContainer struct {
@@ -192,6 +217,38 @@ func m4CheckRedisContainer(t *testing.T, container m4RedisContainer, id, rawURL 
 		}
 	}
 	t.Fatal("the selected Redis container does not publish the fixture's loopback port")
+}
+
+func m4RedisURLAfterRestart(t *testing.T, container m4RedisContainer, rawURL string) string {
+	t.Helper()
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := u.Port()
+	if port == "" {
+		port = "6379"
+	}
+	var replacement string
+	for _, mapping := range container.NetworkSettings.Ports["6379/tcp"] {
+		ipv6 := u.Hostname() == "::1"
+		if ipv6 && mapping.HostIP != "::" && mapping.HostIP != "::1" || !ipv6 && mapping.HostIP != "0.0.0.0" && mapping.HostIP != "127.0.0.1" {
+			continue
+		}
+		value, err := strconv.Atoi(mapping.HostPort)
+		if err != nil || value < 1 || value > 65535 {
+			continue
+		}
+		if mapping.HostPort == port {
+			return rawURL
+		}
+		replacement = mapping.HostPort
+	}
+	if replacement == "" {
+		t.Fatal("restarted Redis container has no compatible published loopback port")
+	}
+	u.Host = net.JoinHostPort(u.Hostname(), replacement)
+	return u.String()
 }
 
 func m4WaitForRedis(t *testing.T, h *testutil.Harness) {
