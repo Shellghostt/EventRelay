@@ -1,0 +1,21 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.8/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "root": "..",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": [
+      "**",
+      "!node_modules",
+      "!playwright-report",
+      "!test-results",
+      "!package-lock.json"
+    ]
+  },
+  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2 },
+  "linter": { "enabled": true, "rules": { "preset": "recommended" } },
+  "assist": { "actions": { "source": { "organizeImports": "on" } } }
+}

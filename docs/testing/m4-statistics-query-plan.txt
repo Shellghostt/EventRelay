@@ -1,0 +1,55 @@
+                                                                                         QUERY PLAN
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ HashAggregate  (cost=7565.59..7565.60 rows=1 width=80) (actual time=218.493..218.497 rows=1 loops=1)
+   Group Key: w.end_at
+   Batches: 1  Memory Usage: 24kB
+   Buffers: shared hit=2056, temp written=659
+   CTE w
+     ->  Result  (cost=0.00..0.01 rows=1 width=8) (actual time=0.001..0.001 rows=1 loops=1)
+   CTE sample
+     ->  Limit  (cost=0.73..1315.50 rows=100001 width=41) (actual time=0.092..143.085 rows=100001 loops=1)
+           Buffers: shared hit=2056
+           ->  Nested Loop Left Join  (cost=0.73..230079.41 rows=17499825 width=41) (actual time=0.091..136.883 rows=100001 loops=1)
+                 Buffers: shared hit=2056
+                 ->  Nested Loop Left Join  (cost=0.57..10690.82 rows=25000 width=104) (actual time=0.068..104.412 rows=100001 loops=1)
+                       Buffers: shared hit=2054
+                       ->  Nested Loop  (cost=0.42..10396.72 rows=11111 width=68) (actual time=0.047..73.202 rows=100001 loops=1)
+                             Join Filter: (e.id = a.event_id)
+                             Buffers: shared hit=2052
+                             ->  Nested Loop  (cost=0.42..10229.03 rows=11111 width=44) (actual time=0.020..53.995 rows=100001 loops=1)
+                                   Join Filter: ((a.finished_at < w_1.end_at) AND (a.finished_at >= (w_1.end_at - '24:00:00'::interval)))
+                                   Buffers: shared hit=2051
+                                   ->  Index Scan using attempts_finished on delivery_attempts a  (cost=0.42..7478.99 rows=100001 width=44) (actual time=0.017..24.123 rows=100001 loops=1)
+                                         Buffers: shared hit=2051
+                                   ->  CTE Scan on w w_1  (cost=0.00..0.02 rows=1 width=8) (actual time=0.000..0.000 rows=1 loops=100001)
+                             ->  Materialize  (cost=0.00..1.02 rows=1 width=24) (actual time=0.000..0.000 rows=1 loops=100001)
+                                   Buffers: shared hit=1
+                                   ->  Seq Scan on events e  (cost=0.00..1.01 rows=1 width=24) (actual time=0.005..0.005 rows=1 loops=1)
+                                         Filter: ((tenant_id = '00000000-0000-0000-0000-000000000001'::uuid) AND (endpoint_id = '00000000-0000-0000-0000-000000000005'::uuid))
+                                         Buffers: shared hit=1
+                       ->  Memoize  (cost=0.16..8.18 rows=1 width=56) (actual time=0.000..0.000 rows=0 loops=100001)
+                             Cache Key: e.id, a.cycle_no
+                             Cache Mode: logical
+                             Hits: 100000  Misses: 1  Evictions: 0  Overflows: 0  Memory Usage: 1kB
+                             Buffers: shared hit=2
+                             ->  Index Scan using delivery_cycles_pkey on delivery_cycles c  (cost=0.15..8.17 rows=1 width=56) (actual time=0.018..0.018 rows=0 loops=1)
+                                   Index Cond: ((event_id = e.id) AND (cycle_no = a.cycle_no))
+                                   Buffers: shared hit=2
+                 ->  Memoize  (cost=0.16..8.18 rows=1 width=48) (actual time=0.000..0.000 rows=0 loops=100001)
+                       Cache Key: e.id
+                       Cache Mode: logical
+                       Hits: 100000  Misses: 1  Evictions: 0  Overflows: 0  Memory Usage: 1kB
+                       Buffers: shared hit=2
+                       ->  Index Scan using dead_letters_pkey on dead_letters d  (cost=0.15..8.17 rows=1 width=48) (actual time=0.019..0.019 rows=0 loops=1)
+                             Index Cond: (event_id = e.id)
+                             Buffers: shared hit=2
+   ->  Nested Loop Left Join  (cost=0.00..3000.05 rows=100001 width=45) (actual time=0.098..192.741 rows=100001 loops=1)
+         Buffers: shared hit=2056, temp written=659
+         ->  CTE Scan on w  (cost=0.00..0.02 rows=1 width=8) (actual time=0.003..0.003 rows=1 loops=1)
+         ->  CTE Scan on sample  (cost=0.00..2000.02 rows=100001 width=37) (actual time=0.094..184.325 rows=100001 loops=1)
+               Buffers: shared hit=2056, temp written=659
+ Planning:
+   Buffers: shared hit=101 read=1
+ Planning Time: 1.849 ms
+ Execution Time: 221.701 ms
+(52 rows)

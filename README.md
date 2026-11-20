@@ -2,14 +2,20 @@
 
 > Self-hosted webhook infrastructure with reliable delivery, event replay, retries and observability.
 
-![status](https://img.shields.io/badge/status-M2_delivery-orange)
+![status](https://img.shields.io/badge/status-M4_verified-green)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 ![Go](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)
 
-**Status: M2 merged into main; M3 implemented on `feat/m3-implementation`, not merged.** Signed events are stored durably and dispatched through Redis Streams to
+**Status: M1–M3 complete and merged into main.** Signed events are stored durably and dispatched through Redis Streams to
 independently scaled HTTP workers. Delivery is at least once: destinations must deduplicate by event ID.
 Retries follow the documented backoff schedule with jitter and `Retry-After`, and dead letters carry a
 stable terminal reason ([ADR 0005](docs/adr/0005-m3-retry-policy.md)).
+M4 inspection, endpoint recovery, guarded replay and the React dashboard are implemented and verified
+locally on the published `feat/m4-implementation` branch. The frontend audit now passes after the
+Picomatch advisory was withdrawn, and physical Redis restart recovery passes under the Windows race
+detector. All seven GitHub CI jobs passed, including the full dashboard and physical restart checks.
+[M4 PR #4](https://github.com/Shellghostt/EventRelay/pull/4) is open for review. See the
+[validation record](docs/testing/m4-inspection-replay-dashboard.md#2026-11-20-readiness-recheck).
 
 ## Why this exists
 
@@ -26,10 +32,11 @@ can read end to end does not really exist as a mature open-source project. Event
 | Event ingestion and persistence | M1 | **Done** |
 | HMAC signature verification | M1 | **Done** |
 | Asynchronous delivery workers | M2 | **Done (merged)** |
-| Configurable retry policies | M3 | **Done** (feature branch; documented schedule, deliberately not configurable — ADR 0005) |
-| Full dead-letter policy and terminal reasons | M3 | **Done** (feature branch) |
-| Request inspection and delivery history | M4 | Not started |
-| Manual event replay | M4 | Not started |
+| Documented retry policy | M3 | **Done (merged)**; fixed schedule — ADR 0005 |
+| Full dead-letter policy and terminal reasons | M3 | **Done (merged)** |
+| Request inspection and delivery history | M4 | **Implemented; verified locally** |
+| Manual event replay | M4 | **Implemented; verified locally** |
+| Endpoint recovery and dashboard | M4 | **Implemented; verified locally** |
 | API key management | M5 | Not started |
 | OpenAPI documentation | M1 | **Done** (implemented paths only) |
 | Per-tenant rate limits | M5 | Not started |
@@ -113,16 +120,39 @@ bytes, so this does not weaken the check.
 
 Workers sign the stored JSON with the separate delivery secret. Private and loopback destinations are
 blocked unless `EVENTRELAY_ALLOW_PRIVATE_TARGETS=true` is explicitly set for local testing. Redirects are
-never followed. Inspect attempts with SQL until the M4 inspection API arrives:
+never followed. Inspect persisted attempts through the management API:
 
-```sql
-SELECT event_id, attempt_no, outcome, response_status, duration_ms
-FROM delivery_attempts ORDER BY id;
+```bash
+curl -s "http://localhost:8080/v1/events/$EVENT_ID/attempts?limit=50" \
+  -H "Authorization: Bearer $EVENTRELAY_ADMIN_TOKEN"
 ```
 
 See [the runnable delivery demo](deploy/README.md) and [M2 decisions](docs/adr/0004-m2-delivery.md).
 The [recorded four-process load run](docs/benchmarks/m2-delivery.md) delivered 10,000 events in 58.84 s.
 See [validation and limits](docs/testing/m1-m2-validation.md) before interpreting the result.
+
+## Inspection and replay dashboard
+
+Open [http://localhost:8080/dashboard/](http://localhost:8080/dashboard/) and enter the configured
+management token. The Go API serves the committed React assets; Node is needed only to develop/rebuild
+the frontend. The browser uses an HttpOnly session cookie and an in-memory CSRF nonce. Sessions expire
+after 30 minutes and end on logout or API restart.
+
+The console filters recent events, pages through attempts and previous delivery cycles, and lets you
+correct/re-enable an endpoint. Replay accepts delivered or dead-lettered events and preserves their ID,
+payload and lifetime history while starting a fresh bounded delivery cycle. Confirming a delivered
+event's replay can repeat an effect at the destination. A stale replay or endpoint revision returns a
+conflict that requires refreshing before another action.
+
+Statistics show successful HTTP-response attempts divided by all HTTP-response attempts in a stated
+24-hour UTC window. No-response attempts have separate counts. Empty denominators and exceeded query
+bounds are explicitly unavailable. Response bodies and headers were never archived and remain unavailable.
+
+![Implemented M4 dashboard with synthetic local fixtures](docs/images/dashboard-m4.png)
+
+This screenshot was captured from the implemented local dashboard using synthetic fixtures. Read the
+[dashboard/API and M3 upgrade guide](docs/guides/inspection-and-replay.md) and
+[M4 validation record](docs/testing/m4-inspection-replay-dashboard.md) for usage, bounds and remaining gates.
 
 ## Repository layout
 
@@ -139,9 +169,11 @@ See [validation and limits](docs/testing/m1-m2-validation.md) before interpretin
 | `internal/worker` | Lease, delivery, completion and recovery loops |
 | `internal/store` | PostgreSQL access, queries, migrations runner |
 | `internal/retry` | Retry schedule, jitter, Retry-After parsing and terminal decisions (ADR 0005) |
+| `internal/dashboard` | Embedded, reproducibly built dashboard assets |
 | `internal/auth` | API keys and tenant resolution (empty until M5) |
 | `pkg/hmacsign` | Public signing and verification helpers, safe to import |
 | `api/openapi.yaml` | OpenAPI 3.1 contract; only implemented paths appear |
+| `api/dashboard.openapi.yaml` | Browser session and dashboard API contract |
 | `migrations` | Forward-only SQL migrations |
 | `web` | React dashboard (M4) |
 | `deploy` | Compose file and deployment notes |
@@ -149,20 +181,29 @@ See [validation and limits](docs/testing/m1-m2-validation.md) before interpretin
 
 ## Roadmap
 
-M3 is implemented on `feat/m3-implementation` with recorded acceptance evidence
-([M3 validation record](docs/testing/m3-retry-policy.md)); it is not merged. Track remote checks in
-[the branch's CI runs](https://github.com/Shellghostt/EventRelay/actions?query=branch%3Afeat%2Fm3-implementation).
+M3 merged through [PR #3](https://github.com/Shellghostt/EventRelay/pull/3), with recorded
+[acceptance evidence](docs/testing/m3-retry-policy.md) and successful
+[main CI](https://github.com/Shellghostt/EventRelay/actions/runs/43802341943).
 The [audit correction record](docs/testing/m3-audit-fixes.md) covers five additional regressions
 and successful native Windows race and bounded load checks.
 Read the [M3 requirements and acceptance gates](docs/phases/M3.md) for the phase contract and
 the [development-tool audit](docs/DEVELOPMENT-TOOLS.md) before debugging.
+M4 follows the updated [phase requirements](docs/phases/M4.md) and accepted
+[replay/inspection ADR](docs/adr/0006-m4-replay-and-inspection.md). Its
+[local validation](docs/testing/m4-inspection-replay-dashboard.md) includes native Windows race,
+real PostgreSQL/Redis integration, browser checks and a bounded load regression. The
+[initial branch CI](https://github.com/Shellghostt/EventRelay/actions/runs/44153798480) passed six
+Go/backend jobs and failed an advisory that has since been withdrawn. The current locked frontend
+checks and physical Redis container-restart test pass locally and in
+[M4 CI](https://github.com/Shellghostt/EventRelay/actions/runs/44766346517).
+M4 is published in [PR #4](https://github.com/Shellghostt/EventRelay/pull/4) for review.
 
 | Milestone | Deliverable | Status |
 |---|---|---|
 | M1 | HTTP ingestion API and durable event storage | **Done** (v0.1.0) |
 | M2 | Redis Streams transport, worker pool, horizontal scaling | **Done (merged)** |
-| M3 | Retry scheduler and dead-letter queue | **Done** (feature branch, not merged) |
-| M4 | Dashboard, request inspection and manual replay | Not started |
+| M3 | Retry scheduler and dead-letter queue | **Done (merged)** |
+| M4 | Dashboard, request inspection and manual replay | **Verified; local and all seven CI jobs pass; PR #4 open** |
 | M5 | Multi-tenancy, API keys, rate limits, idempotency | Not started |
 | M6 | Ordering options, tracing, backpressure, load test report, docs | Not started |
 

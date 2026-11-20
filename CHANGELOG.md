@@ -9,6 +9,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- M4 inspection, endpoint recovery, replay and an embedded React dashboard (ER-021–ER-025/ER-021A,
+  accepted [ADR 0006](docs/adr/0006-m4-replay-and-inspection.md)). Secret-free detail, bounded attempt/cycle
+  pages, observed 24-hour statistics, compatible list extensions and guarded replay preserve event identity
+  and lifetime history while giving each replay a frozen budget. Migration 0004 widens counters, archives
+  cycles and fences old-runtime delivery transitions.
+- Pinned frontend source, lockfile, embedded assets/license attribution, canonical Make targets and an
+  Ubuntu browser/dependency CI job. [M4 local validation](docs/testing/m4-inspection-replay-dashboard.md)
+  records Go/native Windows race, PostgreSQL/Redis, eight frontend unit tests, seven Chromium tests,
+  load/heap/query measurements and a real dashboard screenshot. The M4 branch is published in
+  [PR #4](https://github.com/Shellghostt/EventRelay/pull/4); all seven CI jobs passed.
+  The initial Picomatch audit advisory was withdrawn, and the locked
+  frontend audit now passes.
+- A separate opt-in race test restarts a verified disposable Redis container after accepting an exhausted
+  event's replay. It proves durable recovery, one real delivery and preserved event/attempt/terminal
+  history. Integration CI runs it against its own Redis service after the regular suite.
 - [M3 requirements](docs/phases/M3.md) with phase boundaries, failure cases, ADR prerequisites and
   acceptance gates, plus a [development-tool audit](docs/DEVELOPMENT-TOOLS.md).
 - M3 retry policy and dead-letter handling (ER-017–ER-020, [ADR 0005](docs/adr/0005-m3-retry-policy.md)):
@@ -29,6 +44,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Security
 
+- M4 browser access uses bounded 30-minute HttpOnly sessions, separate CSRF nonces, exact-origin mutation
+  checks, logout revocation, restart invalidation and a same-origin CSP. New inspection reads and response
+  sizes are bounded; payload/diagnostic evidence renders as text.
 - The request log no longer uses `chi`'s `middleware.RealIP`. That middleware copies
   `X-Forwarded-For` into `r.RemoteAddr` whether or not a proxy set it, so a client could forge the
   address it was logged under. The peer address is now logged in the `remote_addr` field, and
@@ -38,6 +56,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- M4 workers schedule by frozen cycle count/budget while keeping lifetime attempt numbers monotonic.
+  Legacy event lists retain payloads/cursors; the dashboard requests summaries. Endpoint pagination is
+  opt-in, and new cursors bind route, tenant and canonical parsed time/endpoint filters.
+- Docker build context excludes frontend dependencies/test runtime, and the canonical Docker target now
+  passes the requested `VERSION` to both binaries.
 - Readiness checks both PostgreSQL and Redis. Feature and fix branches trigger the CI matrix and
   the PostgreSQL/Redis delivery integration job.
 - The repository is published at https://github.com/Shellghostt/EventRelay and the CI workflow has
@@ -52,6 +75,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Endpoint recovery increments a management revision so an old-destination HTTP 410 cannot disable a
+  corrected endpoint. Stale replay requests cannot start another cycle after rapid completion.
+- Browser teardown waits for server cleanup, propagates cleanup failures and atomically records the Go
+  child's exit before Playwright terminates the Windows process tree.
+- Native build/run targets use Go's executable suffix so Windows runs the newly built `.exe` instead of
+  resolving an older executable beside a file without an extension.
 - Truncated retryable responses retain `Retry-After`, and blocked destinations receive
   `non_retryable_policy` while retaining their M2 attempt classification.
 - Retry scheduling runs after completion fences without redrawing jitter for stale workers or shifting
@@ -69,7 +98,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Planned
 
-- M4: inspection and replay APIs, attempt history and the React dashboard.
+- M5 tenancy, API keys, rate limits and idempotency; M6 production posture and retention.
 
 ## [0.1.0] - 2026-11-13
 

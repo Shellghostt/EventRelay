@@ -31,6 +31,7 @@ type endpointResponse struct {
 	Enabled        bool      `json:"enabled"`
 	MaxAttempts    int16     `json:"max_attempts"`
 	CreatedAt      time.Time `json:"created_at"`
+	Revision       int32     `json:"revision"`
 	IngestSecret   string    `json:"ingest_secret,omitempty"`
 	DeliverySecret string    `json:"delivery_secret,omitempty"`
 }
@@ -43,6 +44,7 @@ func toEndpointResponse(e store.Endpoint, includeSecrets bool) endpointResponse 
 		Enabled:     e.Enabled,
 		MaxAttempts: e.MaxAttempts,
 		CreatedAt:   e.CreatedAt,
+		Revision:    e.Revision,
 	}
 	if includeSecrets {
 		out.IngestSecret = base64.StdEncoding.EncodeToString(e.IngestSecret)
@@ -108,6 +110,10 @@ func (s *server) createEndpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) listEndpoints(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Has("limit") || r.URL.Query().Has("cursor") || strings.HasPrefix(r.URL.Path, "/dashboard/api/") {
+		s.endpointPage(w, r)
+		return
+	}
 	endpoints, err := s.store.ListEndpoints(r.Context(), uuid.MustParse(store.DefaultTenantID))
 	if err != nil {
 		s.log.Error("list endpoints", "error", err)

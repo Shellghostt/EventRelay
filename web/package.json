@@ -1,0 +1,38 @@
+{
+  "name": "eventrelay-dashboard",
+  "private": true,
+  "version": "0.4.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.22.3 <23"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "tsc --noEmit && vite build",
+    "test:browser": "playwright test",
+    "licenses": "node scripts/licenses.mjs",
+    "audit": "npm audit --audit-level=moderate",
+    "verify:assets": "npm run build && git diff --exit-code -- ../internal/dashboard/dist"
+  },
+  "dependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@biomejs/biome": "2.6.8",
+    "@playwright/test": "1.65.1",
+    "@testing-library/react": "16.3.3",
+    "@types/react": "19.3.0",
+    "@types/node": "22.20.5",
+    "@types/react-dom": "19.3.0",
+    "jsdom": "31.0.1",
+    "typescript": "7.0.2",
+    "vite": "8.3.8",
+    "vitest": "5.1.0"
+  }
+}

@@ -3,6 +3,7 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"log/slog"
 	"net/http"
@@ -32,6 +33,8 @@ type server struct {
 	cfg       config.Config
 	log       *slog.Logger
 	redisPing func(context.Context) error
+	cursorKey [32]byte
+	sessions  *dashboardSessions
 }
 
 // NewRouter builds the complete handler tree.
@@ -42,6 +45,7 @@ type server struct {
 //   - /v1/endpoints/{id}/events (ingest): HMAC signature, no bearer token.
 func NewRouter(d Deps) http.Handler {
 	s := &server{store: d.Store, cfg: d.Config, log: d.Log, redisPing: d.RedisPing}
+	s.cursorKey = sha256.Sum256([]byte("eventrelay-m4-cursor\x00" + d.Config.AdminToken))
 
 	r := chi.NewRouter()
 	// Keep the socket peer intact. Only explicitly trusted proxies may provide
@@ -73,8 +77,16 @@ func NewRouter(d Deps) http.Handler {
 		r.Post("/v1/endpoints", s.createEndpoint)
 		r.Get("/v1/endpoints", s.listEndpoints)
 		r.Get("/v1/events", s.listEvents)
+		r.Get("/v1/events/{id}", s.eventDetail)
+		r.Get("/v1/events/{id}/attempts", s.attempts)
+		r.Get("/v1/events/{id}/cycles", s.cycles)
+		r.Post("/v1/events/{id}/replay", s.replay)
+		r.Get("/v1/endpoints/{id}", s.endpointDetail)
+		r.Get("/v1/endpoints/{id}/stats", s.endpointStats)
+		r.Patch("/v1/endpoints/{id}", s.patchEndpoint)
 	})
 
+	s.mountDashboard(r)
 	return r
 }
 
@@ -106,7 +118,7 @@ func requireAdminToken(token string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			header := r.Header.Get("Authorization")
 			raw, ok := strings.CutPrefix(header, "Bearer ")
-			if !ok || subtle.ConstantTimeCompare([]byte(strings.TrimSpace(raw)), expected) != 1 {
+			if token == "" || !ok || subtle.ConstantTimeCompare([]byte(strings.TrimSpace(raw)), expected) != 1 {
 				w.Header().Set("WWW-Authenticate", "Bearer")
 				writeProblem(w, http.StatusUnauthorized, "unauthorized", "Unauthorized",
 					"A valid bearer token is required.")

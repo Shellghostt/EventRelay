@@ -129,8 +129,8 @@ func (w *Worker) consume(ctx context.Context, id string) {
 					StatusCode:     result.Status,
 					PolicyRejected: result.PolicyRejected,
 					RetryAfter:     result.RetryAfter,
-					FailedAttempt:  int(lease.Event.AttemptCount),
-					MaxAttempts:    int(lease.Endpoint.MaxAttempts),
+					FailedAttempt:  int(lease.Event.CycleAttemptCount),
+					MaxAttempts:    int(lease.Event.CycleMaxAttempts),
 					CompletedAt:    completedAt,
 				}, randFloat64)
 			}

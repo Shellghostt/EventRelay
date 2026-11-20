@@ -9,7 +9,8 @@ Thanks for taking the time. This document is deliberately short and specific.
 2. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - how the pieces fit together.
 3. [docs/adr/](docs/adr/) - decisions that have already been argued about. Do not relitigate them
    without a new ADR.
-4. [docs/phases/M3.md](docs/phases/M3.md) - M3 scope, evidence, unresolved ADR decisions and acceptance gates.
+4. [docs/phases/M4.md](docs/phases/M4.md) - M4 scope, dependency order and evidence;
+   preserve the [M3 contract](docs/phases/M3.md) and accepted ADR 0006.
 5. [docs/DEVELOPMENT-TOOLS.md](docs/DEVELOPMENT-TOOLS.md) - CodeGraph freshness, static-analysis coverage
    and profiling appropriate to this repository's runtime.
 
@@ -42,6 +43,21 @@ EVENTRELAY_TEST_REDIS_URL='redis://localhost:56380/0' \
 Use disposable services: delivery tests isolate their schema/key, while the M1 store test uses the
 default schema. [deploy/README.md](deploy/README.md) includes Windows commands, the delivery demo and load tests.
 
+Go-only builds and tests use committed dashboard assets. Frontend changes require Node 22.22.3/npm
+10.9.8 and the locked dependencies:
+
+```bash
+make frontend-install
+make frontend-check
+(cd web && npx playwright install chromium)
+make frontend-browser  # with the disposable PostgreSQL/Redis URLs exported
+make frontend-assets-check
+```
+
+Commit source, `web/package-lock.json` and rebuilt `internal/dashboard/dist` together. The browser fixture
+uses a unique schema/key and teardown waits for cleanup before returning. See [web/README.md](web/README.md)
+for pinned tools/license review and [the M4 guide](docs/guides/inspection-and-replay.md) for upgrade rules.
+
 ## Code navigation
 
 [CodeGraph](https://github.com/colbymchenry/codegraph) builds a local symbol index of this
@@ -73,7 +89,8 @@ Types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`, `ci`, `chore`
 1. Open an issue first for anything larger than a typo. It saves everyone time.
 2. Branch from `main`: `feat/short-slug`, `fix/short-slug`.
 3. Add tests. A pull request that reduces coverage needs a reason in the description.
-4. Run `make lint` and `make test` locally before pushing.
+4. Run `make lint`, `make test`, `make race` and `make build` locally before pushing; run the frontend
+   gates above when changing dashboard source/assets or its API.
 5. Fill in the pull request template completely, including how you verified the change.
 6. CI must be green. Reviewers are looking for correctness first, style second.
 

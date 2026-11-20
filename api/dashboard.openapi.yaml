@@ -1,0 +1,282 @@
+openapi: 3.1.0
+info:
+  title: EventRelay browser console API
+  version: 0.4.0
+  description: |
+    Same-origin routes used by the embedded React console. Static assets at
+    /dashboard/ contain no credentials. Login creates a random HttpOnly,
+    SameSite=Strict cookie, with a 30-minute absolute lifetime and a separate
+    CSRF nonce held in client memory. At most 256 sessions exist per API process.
+    Logout revokes the session; restart invalidates all sessions. HTTPS sessions
+    have Secure cookies. EVENTRELAY_DASHBOARD_ORIGIN pins a TLS proxy origin;
+    otherwise plain HTTP sessions are permitted only for loopback hosts.
+    Origin must match exactly for login and mutations; mutations also require
+    X-EventRelay-CSRF. Cookies never authorize /v1 or ingestion. The browser
+    router permits inspection, endpoint URL/enabled PATCH and replay only.
+servers:
+  - url: http://localhost:8080
+security:
+  - browserSession: []
+paths:
+  /dashboard/api/login:
+    post:
+      operationId: loginDashboard
+      summary: Exchange a management token for a bounded browser session
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/Origin"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [token]
+              properties:
+                token: {type: string}
+      responses:
+        "200":
+          description: Session cookie, separate CSRF nonce and absolute expiry
+          headers:
+            Set-Cookie:
+              schema: {type: string}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Session"}
+        "401": {$ref: "openapi.yaml#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "openapi.yaml#/components/responses/UnprocessableEntity"}
+        "503":
+          description: dashboard-session-limit; log out an existing session or wait for expiry
+          content:
+            application/problem+json:
+              schema: {$ref: "openapi.yaml#/components/schemas/Problem"}
+  /dashboard/api/session:
+    get:
+      operationId: inspectDashboardSession
+      summary: Read the current nonce and absolute session expiry
+      responses:
+        "200":
+          description: Current session; no sliding expiry
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Session"}
+        "401": {$ref: "openapi.yaml#/components/responses/Unauthorized"}
+  /dashboard/api/logout:
+    post:
+      operationId: logoutDashboard
+      summary: Revoke a session and clear its cookie
+      security: [{browserSession: [], csrfNonce: []}]
+      parameters:
+        - $ref: "#/components/parameters/Origin"
+      responses:
+        "204": {description: Session revoked}
+        "401": {$ref: "openapi.yaml#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+  /dashboard/api/events:
+    get:
+      operationId: listDashboardEvents
+      summary: Page payload-free event summaries
+      description: |
+        Always uses summary responses. Supports status, endpoint_id, RFC3339
+        from/to, limit and cursor as documented in the bearer list operation.
+        Cursors bind route, tenant and filters. Two-second/1-MiB inspection bounds
+        apply; status changes affect live membership.
+      parameters:
+        - $ref: "openapi.yaml#/components/parameters/PageLimit"
+        - $ref: "openapi.yaml#/components/parameters/BoundCursor"
+        - {name: status, in: query, schema: {type: string, enum: [pending, in_flight, delivered, dead_lettered, canceled]}}
+        - {name: endpoint_id, in: query, schema: {type: string, format: uuid}}
+        - {name: from, in: query, schema: {type: string, format: date-time}}
+        - {name: to, in: query, schema: {type: string, format: date-time}}
+      responses:
+        "200":
+          description: Bounded event summary page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events, next_cursor]
+                properties:
+                  events: {type: array, maxItems: 200, items: {$ref: "openapi.yaml#/components/schemas/EventSummary"}}
+                  next_cursor: {type: [string, "null"]}
+        "401": {$ref: "openapi.yaml#/components/responses/Unauthorized"}
+        "422": {$ref: "openapi.yaml#/components/responses/UnprocessableEntity"}
+        "503": {$ref: "openapi.yaml#/components/responses/InspectionUnavailable"}
+  /dashboard/api/events/{id}:
+    parameters:
+      - $ref: "openapi.yaml#/components/parameters/ResourceID"
+    get:
+      operationId: inspectDashboardEvent
+      summary: Explicitly inspect current event state and a bounded payload
+      responses:
+        "200":
+          description: Current stored state; payload limit and unavailable fields match the bearer API
+          content:
+            application/json:
+              schema: {$ref: "openapi.yaml#/components/schemas/EventDetail"}
+        "401": {$ref: "openapi.yaml#/components/responses/Unauthorized"}
+        "404": {$ref: "openapi.yaml#/components/responses/NotFound"}
+        "503": {$ref: "openapi.yaml#/components/responses/InspectionUnavailable"}
+  /dashboard/api/events/{id}/attempts:
+    parameters:
+      - $ref: "openapi.yaml#/components/parameters/ResourceID"
+      - $ref: "openapi.yaml#/components/parameters/PageLimit"
+      - $ref: "openapi.yaml#/components/parameters/BoundCursor"
+    get:
+      operationId: inspectDashboardAttempts
+      summary: Page ascending lifetime attempts with uncaptured evidence unavailable
+      responses:
+        "200":
+          description: Bounded persisted attempt page
+          content:
+            application/json:
+              schema: {$ref: "openapi.yaml#/components/schemas/AttemptPage"}
+        "401": {$ref: "openapi.yaml#/components/responses/Unauthorized"}
+        "404": {$ref: "openapi.yaml#/components/responses/NotFound"}
+        "422": {$ref: "openapi.yaml#/components/responses/UnprocessableEntity"}
+        "503": {$ref: "openapi.yaml#/components/responses/InspectionUnavailable"}
+  /dashboard/api/events/{id}/cycles:
+    parameters:
+      - $ref: "openapi.yaml#/components/parameters/ResourceID"
+      - $ref: "openapi.yaml#/components/parameters/PageLimit"
+      - $ref: "openapi.yaml#/components/parameters/BoundCursor"
+    get:
+      operationId: inspectDashboardCycles
+      summary: Page previous completed cycles in ascending order
+      responses:
+        "200":
+          description: Bounded prior cycle history
+          content:
+            application/json:
+              schema: {$ref: "openapi.yaml#/components/schemas/CyclePage"}
+        "401": {$ref: "openapi.yaml#/components/responses/Unauthorized"}
+        "404": {$ref: "openapi.yaml#/components/responses/NotFound"}
+        "422": {$ref: "openapi.yaml#/components/responses/UnprocessableEntity"}
+        "503": {$ref: "openapi.yaml#/components/responses/InspectionUnavailable"}
+  /dashboard/api/events/{id}/replay:
+    parameters:
+      - $ref: "openapi.yaml#/components/parameters/ResourceID"
+    post:
+      operationId: replayDashboardEvent
+      summary: Submit one guarded replay without retrying a conflict
+      description: Same replay preconditions, cycle accounting and duplicate-effect behavior as the bearer operation.
+      security: [{browserSession: [], csrfNonce: []}]
+      parameters:
+        - $ref: "#/components/parameters/Origin"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "openapi.yaml#/components/schemas/ReplayRequest"}
+      responses:
+        "202":
+          description: Durable pending replay; creates no HTTP attempt
+          content:
+            application/json:
+              schema: {$ref: "openapi.yaml#/components/schemas/EventSummary"}
+        "401": {$ref: "openapi.yaml#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "openapi.yaml#/components/responses/NotFound"}
+        "409": {$ref: "openapi.yaml#/components/responses/StateConflict"}
+        "422": {$ref: "openapi.yaml#/components/responses/UnprocessableEntity"}
+        "503": {$ref: "openapi.yaml#/components/responses/InspectionUnavailable"}
+  /dashboard/api/endpoints:
+    get:
+      operationId: listDashboardEndpoints
+      summary: Page secret-free endpoint configuration
+      parameters:
+        - $ref: "openapi.yaml#/components/parameters/PageLimit"
+        - $ref: "openapi.yaml#/components/parameters/BoundCursor"
+      responses:
+        "200":
+          description: Always a bounded descending created_at/id page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [endpoints, next_cursor]
+                properties:
+                  endpoints: {type: array, maxItems: 200, items: {$ref: "openapi.yaml#/components/schemas/Endpoint"}}
+                  next_cursor: {type: [string, "null"]}
+        "401": {$ref: "openapi.yaml#/components/responses/Unauthorized"}
+        "422": {$ref: "openapi.yaml#/components/responses/UnprocessableEntity"}
+        "503": {$ref: "openapi.yaml#/components/responses/InspectionUnavailable"}
+  /dashboard/api/endpoints/{id}:
+    parameters:
+      - $ref: "openapi.yaml#/components/parameters/ResourceID"
+    get:
+      operationId: inspectDashboardEndpoint
+      summary: Inspect an owned endpoint without secrets or a probe
+      responses:
+        "200":
+          description: Current endpoint configuration
+          content:
+            application/json:
+              schema: {$ref: "openapi.yaml#/components/schemas/Endpoint"}
+        "401": {$ref: "openapi.yaml#/components/responses/Unauthorized"}
+        "404": {$ref: "openapi.yaml#/components/responses/NotFound"}
+        "503": {$ref: "openapi.yaml#/components/responses/InspectionUnavailable"}
+    patch:
+      operationId: updateDashboardEndpoint
+      summary: Correct URL/enabled at its expected revision
+      security: [{browserSession: [], csrfNonce: []}]
+      parameters:
+        - $ref: "#/components/parameters/Origin"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "openapi.yaml#/components/schemas/EndpointPatch"}
+      responses:
+        "200":
+          description: New revision; no budget or secret editing
+          content:
+            application/json:
+              schema: {$ref: "openapi.yaml#/components/schemas/Endpoint"}
+        "401": {$ref: "openapi.yaml#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "openapi.yaml#/components/responses/NotFound"}
+        "409": {$ref: "openapi.yaml#/components/responses/StateConflict"}
+        "422": {$ref: "openapi.yaml#/components/responses/UnprocessableEntity"}
+        "503": {$ref: "openapi.yaml#/components/responses/InspectionUnavailable"}
+  /dashboard/api/endpoints/{id}/stats:
+    parameters:
+      - $ref: "openapi.yaml#/components/parameters/ResourceID"
+    get:
+      operationId: inspectDashboardEndpointStatistics
+      summary: Observe finished HTTP attempt success in the database 24-hour UTC window
+      responses:
+        "200":
+          description: Complete bounded aggregate or explicit unavailable state
+          content:
+            application/json:
+              schema: {$ref: "openapi.yaml#/components/schemas/EndpointStatistics"}
+        "401": {$ref: "openapi.yaml#/components/responses/Unauthorized"}
+        "404": {$ref: "openapi.yaml#/components/responses/NotFound"}
+        "503": {$ref: "openapi.yaml#/components/responses/InspectionUnavailable"}
+components:
+  securitySchemes:
+    browserSession: {type: apiKey, in: cookie, name: eventrelay_dashboard}
+    csrfNonce: {type: apiKey, in: header, name: X-EventRelay-CSRF}
+  parameters:
+    Origin:
+      name: Origin
+      in: header
+      required: true
+      schema: {type: string, format: uri}
+      description: Must exactly match the permitted dashboard origin.
+  responses:
+    Forbidden:
+      description: invalid-origin or invalid-csrf; action has not been applied
+      content:
+        application/problem+json:
+          schema: {$ref: "openapi.yaml#/components/schemas/Problem"}
+  schemas:
+    Session:
+      type: object
+      required: [csrf_nonce, expires_at]
+      properties:
+        csrf_nonce: {type: string, minLength: 40}
+        expires_at: {type: string, format: date-time}

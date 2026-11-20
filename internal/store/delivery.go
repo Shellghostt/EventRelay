@@ -20,42 +20,60 @@ type Lease struct {
 
 var ErrLeaseLost = errors.New("delivery lease expired or replaced")
 
+// beginDelivery marks every transition with the post-cutover runtime version.
+// The marker is transaction-local; it never leaks into pooled connections.
+func (s *Store) beginDelivery(ctx context.Context) (pgx.Tx, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = tx.Exec(ctx, `SELECT set_config('eventrelay.worker_schema_version','4',true)`); err != nil {
+		_ = tx.Rollback(context.Background())
+		return nil, err
+	}
+	return tx, nil
+}
+
 // Claim atomically leases one due event and records the start before any HTTP I/O.
 func (s *Store) Claim(ctx context.Context, tenant, id uuid.UUID, worker string, duration time.Duration) (Lease, error) {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.beginDelivery(ctx)
 	if err != nil {
 		return Lease{}, err
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
 	token := worker + ":" + uuid.NewString()
-	q := `UPDATE events SET status='in_flight', leased_by=$3,
-		lease_expires_at=now()+$4::interval, attempt_count=attempt_count+1
-		WHERE id = (SELECT e.id FROM events e JOIN endpoints p ON p.id=e.endpoint_id AND p.tenant_id=e.tenant_id
-		WHERE e.tenant_id=$1::uuid AND e.id=$2::uuid AND e.status='pending' AND e.next_attempt_at<=now()
-		AND p.enabled AND e.attempt_count < p.max_attempts FOR UPDATE OF e SKIP LOCKED)
-		RETURNING ` + eventColumns
-	var e Event
-	var payload string
-	err = tx.QueryRow(ctx, q, tenant.String(), id.String(), token, fmt.Sprintf("%f seconds", duration.Seconds())).Scan(
-		&e.ID, &e.TenantID, &e.EndpointID, &e.EventType, &payload, &e.IdempotencyKey, &e.Status,
-		&e.AttemptCount, &e.ReplayCount, &e.NextAttemptAt, &e.ReceivedAt, &e.DeliveredAt, &e.LastError)
+	// Lock the event before the endpoint in every delivery/replay transaction.
+	e, err := scanEvent(tx.QueryRow(ctx, `SELECT `+eventColumns+` FROM events
+		WHERE tenant_id=$1::uuid AND id=$2::uuid AND status='pending' AND next_attempt_at<=now()
+		AND cycle_attempt_count<cycle_max_attempts AND attempt_count<2147483647
+		FOR UPDATE SKIP LOCKED`, tenant.String(), id.String()))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Lease{}, ErrNotFound
 	}
 	if err != nil {
 		return Lease{}, err
 	}
-	e.Payload = []byte(payload)
-	// Read through this transaction to avoid needing a second pool connection.
+	// Share-lock configuration until the URL/revision snapshot is committed.
 	var ep Endpoint
-	err = tx.QueryRow(ctx, `SELECT url,delivery_secret,max_attempts FROM endpoints WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenant.String(), e.EndpointID.String()).Scan(&ep.URL, &ep.DeliverySecret, &ep.MaxAttempts)
+	err = tx.QueryRow(ctx, `SELECT url,delivery_secret,max_attempts,enabled,revision FROM endpoints
+		WHERE tenant_id=$1::uuid AND id=$2::uuid FOR SHARE`, tenant.String(), e.EndpointID.String()).Scan(&ep.URL, &ep.DeliverySecret, &ep.MaxAttempts, &ep.Enabled, &ep.Revision)
 	if err != nil {
 		return Lease{}, err
 	}
 	ep.ID = e.EndpointID
 	ep.TenantID = tenant
-	ep.Enabled = true
-	_, err = tx.Exec(ctx, `INSERT INTO delivery_attempts(event_id,attempt_no,started_at,outcome) VALUES($1::uuid,$2,now(),'in_flight')`, id.String(), e.AttemptCount)
+	if !ep.Enabled {
+		return Lease{}, ErrNotFound
+	}
+	e, err = scanEvent(tx.QueryRow(ctx, `UPDATE events SET status='in_flight',leased_by=$3,
+		lease_expires_at=clock_timestamp()+$4::interval,attempt_count=attempt_count+1,
+		cycle_attempt_count=cycle_attempt_count+1 WHERE tenant_id=$1::uuid AND id=$2::uuid
+		RETURNING `+eventColumns, tenant.String(), id.String(), token, fmt.Sprintf("%f seconds", duration.Seconds())))
+	if err != nil {
+		return Lease{}, err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO delivery_attempts(event_id,attempt_no,started_at,outcome,cycle_no,cycle_attempt_no,endpoint_revision)
+		VALUES($1::uuid,$2,now(),'in_flight',$3,$4,$5)`, id.String(), e.AttemptCount, e.ReplayCount, e.CycleAttemptCount, ep.Revision)
 	if err != nil {
 		return Lease{}, err
 	}
@@ -85,7 +103,7 @@ type AttemptResult struct {
 // redraw jitter. Successful attempts do not call decide and may pass nil.
 // The callback must be a bounded calculation without I/O while the row is locked.
 func (s *Store) Finish(ctx context.Context, lease Lease, result AttemptResult, decide func() (retry.Decision, error)) error {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.beginDelivery(ctx)
 	if err != nil {
 		return err
 	}
@@ -146,7 +164,8 @@ func (s *Store) Finish(ctx context.Context, lease Lease, result AttemptResult, d
 	}
 	_, err = tx.Exec(ctx, `UPDATE events SET status=$3,leased_by=NULL,lease_expires_at=NULL,last_error=NULLIF($4,''),
 		next_attempt_at=CASE WHEN $3='pending' THEN $5::timestamptz ELSE now() END,
-		dispatch_after=now(),delivered_at=CASE WHEN $3='delivered' THEN now() ELSE NULL END
+		dispatch_after=now(),delivered_at=CASE WHEN $3='delivered' THEN now() ELSE NULL END,
+		cycle_finished_at=CASE WHEN $3 IN ('delivered','dead_lettered') THEN now() ELSE NULL END
 		WHERE tenant_id=$1::uuid AND id=$2::uuid`, e.TenantID.String(), e.ID.String(), status, errorText, decision.NextAttempt)
 	if err != nil {
 		return err
@@ -158,7 +177,8 @@ func (s *Store) Finish(ctx context.Context, lease Lease, result AttemptResult, d
 		}
 	}
 	if result.Status == 410 {
-		_, err = tx.Exec(ctx, `UPDATE endpoints SET enabled=false,updated_at=now() WHERE tenant_id=$1::uuid AND id=$2::uuid`, e.TenantID.String(), e.EndpointID.String())
+		_, err = tx.Exec(ctx, `UPDATE endpoints SET enabled=false,updated_at=now()
+			WHERE tenant_id=$1::uuid AND id=$2::uuid AND revision=$3`, e.TenantID.String(), e.EndpointID.String(), lease.Endpoint.Revision)
 		if err != nil {
 			return err
 		}
@@ -203,24 +223,24 @@ func (s *Store) RecoverExpired(ctx context.Context, tenant uuid.UUID, next func(
 	if next == nil {
 		return 0, errors.New("store: recovery schedule is required")
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.beginDelivery(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	rows, err := tx.Query(ctx, `SELECT e.id::text,e.attempt_count,p.max_attempts FROM events e JOIN endpoints p ON p.id=e.endpoint_id AND p.tenant_id=e.tenant_id
+	rows, err := tx.Query(ctx, `SELECT e.id::text,e.attempt_count,e.cycle_attempt_count,e.cycle_max_attempts FROM events e
 		WHERE e.tenant_id=$1::uuid AND e.status='in_flight' AND e.lease_expires_at<=now() ORDER BY e.lease_expires_at LIMIT 256 FOR UPDATE OF e SKIP LOCKED`, tenant.String())
 	if err != nil {
 		return 0, err
 	}
 	type expired struct {
-		id           string
-		attempt, max int
+		id                         string
+		attempt, cycleAttempt, max int
 	}
 	var expiredRows []expired
 	for rows.Next() {
 		var x expired
-		if err := rows.Scan(&x.id, &x.attempt, &x.max); err != nil {
+		if err := rows.Scan(&x.id, &x.attempt, &x.cycleAttempt, &x.max); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -238,17 +258,19 @@ func (s *Store) RecoverExpired(ctx context.Context, tenant uuid.UUID, next func(
 		}
 		status := StatusPending
 		nextAttempt := time.Time{}
-		if x.attempt >= x.max {
+		if x.cycleAttempt >= x.max {
 			status = StatusDeadLettered
 		} else {
-			nextAttempt = next(x.attempt)
+			nextAttempt = next(x.cycleAttempt)
 			if nextAttempt.IsZero() {
 				return 0, fmt.Errorf("store: recovery schedule returned no time for attempt %d", x.attempt)
 			}
 		}
 		_, err = tx.Exec(ctx, `UPDATE events SET status=$3,leased_by=NULL,lease_expires_at=NULL,
 			next_attempt_at=CASE WHEN $3='pending' THEN $4::timestamptz ELSE now() END,
-			dispatch_after=now(),last_error='worker lease expired' WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenant.String(), x.id, status, nextAttempt)
+			dispatch_after=now(),last_error='worker lease expired',
+			cycle_finished_at=CASE WHEN $3='dead_lettered' THEN now() ELSE NULL END
+			WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenant.String(), x.id, status, nextAttempt)
 		if err != nil {
 			return 0, err
 		}

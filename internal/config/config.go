@@ -21,6 +21,7 @@ type Config struct {
 	PostgresDSN         string
 	RedisURL            string
 	AdminToken          string
+	DashboardOrigin     string
 	MaxPayloadBytes     int64
 	SignatureTolerance  time.Duration
 	HTTPTimeout         time.Duration
@@ -55,6 +56,7 @@ func Load(getenv func(string) string) (Config, error) {
 		PostgresDSN:        strings.TrimSpace(getenv("EVENTRELAY_POSTGRES_DSN")),
 		RedisURL:           strings.TrimSpace(getenv("EVENTRELAY_REDIS_URL")),
 		AdminToken:         strings.TrimSpace(getenv("EVENTRELAY_ADMIN_TOKEN")),
+		DashboardOrigin:    strings.TrimSpace(getenv("EVENTRELAY_DASHBOARD_ORIGIN")),
 		MaxPayloadBytes:    DefaultMaxPayloadBytes,
 		SignatureTolerance: DefaultSignatureTolerance,
 		HTTPTimeout:        DefaultHTTPTimeout,
@@ -71,6 +73,14 @@ func Load(getenv func(string) string) (Config, error) {
 	var problems []error
 	invalid := func(name, value, want string) {
 		problems = append(problems, fmt.Errorf("%s=%q is invalid: expected %s", name, value, want))
+	}
+	if cfg.DashboardOrigin != "" {
+		origin, err := ValidateDashboardOrigin(cfg.DashboardOrigin)
+		if err != nil {
+			problems = append(problems, fmt.Errorf("EVENTRELAY_DASHBOARD_ORIGIN: %w", err))
+		} else {
+			cfg.DashboardOrigin = origin
+		}
 	}
 	if v := getenv("EVENTRELAY_WORKERS"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -212,6 +222,33 @@ func Load(getenv func(string) string) (Config, error) {
 	return cfg, nil
 }
 
+// ValidateDashboardOrigin accepts a single origin, with no credentials or path.
+func ValidateDashboardOrigin(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") || u.Opaque != "" {
+		return "", errors.New("expected an http(s) origin without credentials, path, query or fragment")
+	}
+	if u.Hostname() == "" {
+		return "", errors.New("origin must include a hostname")
+	}
+	if port := u.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return "", errors.New("origin port must be between 1 and 65535")
+		}
+		if (u.Scheme == "http" && port == "80") || (u.Scheme == "https" && port == "443") {
+			host := u.Hostname()
+			if strings.Contains(host, ":") {
+				host = "[" + host + "]"
+			}
+			u.Host = host
+		}
+	} else if strings.HasSuffix(u.Host, ":") {
+		return "", errors.New("origin must not contain an empty port")
+	}
+	return u.Scheme + "://" + strings.ToLower(u.Host), nil
+}
+
 // LoadWorker shares validation but requires no management credential.
 func LoadWorker(getenv func(string) string) (Config, error) {
 	cfg, err := Load(func(key string) string {
@@ -227,15 +264,16 @@ func LoadWorker(getenv func(string) string) (Config, error) {
 // Redacted returns the configuration safe to log.
 func (c Config) Redacted() map[string]any {
 	return map[string]any{
-		"http_addr":           c.HTTPAddr,
-		"postgres_dsn":        redactDSN(c.PostgresDSN),
-		"redis_configured":    c.RedisURL != "",
-		"admin_token_set":     c.AdminToken != "",
-		"max_payload_bytes":   c.MaxPayloadBytes,
-		"signature_tolerance": c.SignatureTolerance.String(),
-		"log_level":           c.LogLevel.String(),
-		"log_format":          c.LogFormat,
-		"migrate_on_start":    c.MigrateOnStart,
+		"http_addr":            c.HTTPAddr,
+		"postgres_dsn":         redactDSN(c.PostgresDSN),
+		"redis_configured":     c.RedisURL != "",
+		"admin_token_set":      c.AdminToken != "",
+		"dashboard_origin_set": c.DashboardOrigin != "",
+		"max_payload_bytes":    c.MaxPayloadBytes,
+		"signature_tolerance":  c.SignatureTolerance.String(),
+		"log_level":            c.LogLevel.String(),
+		"log_format":           c.LogFormat,
+		"migrate_on_start":     c.MigrateOnStart,
 	}
 }
 
