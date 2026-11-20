@@ -1,7 +1,7 @@
 # EventRelay dashboard
 
-The M4 console is implemented and verified locally on the published feature branch. Its CI dependency
-audit is blocked by an unpatched Picomatch advisory; see the validation record below.
+The M4 console is implemented and verified locally on the published feature branch. The locked
+dependency audit passes after the Picomatch advisory was withdrawn; final updated-branch CI is pending.
 It uses React, TypeScript, Vite and repository-owned CSS. The Go API embeds committed assets from
 `internal/dashboard/dist` and serves them at `/dashboard/`.
 
@@ -28,6 +28,8 @@ The normal embedded dashboard needs only Go; Node is not used by either deployme
 CI installs the locked dependencies, runs these gates on Ubuntu and checks rebuilt assets against Git.
 The existing Go matrix consumes committed assets. The first M4 push CI passed all Go/backend jobs and
 frontend type/lint/unit/build/license checks, then failed the npm audit before asset/browser validation.
+GitHub withdrew GHSA-fc5q-39xc-vjpf on 2026-11-18. The 2026-11-20 locked reinstall, full frontend checks,
+asset comparison and all seven real browser tests pass. Audit still uses `--audit-level=moderate`.
 
 ## Browser lifecycle and data
 

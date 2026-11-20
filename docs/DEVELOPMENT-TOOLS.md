@@ -1,6 +1,7 @@
 # Development tools and memory validation
 
-Base audit: 2026-11-14; M4 validation finalized 2026-11-18. These are development aids, not product features or substitutes for tests.
+Base audit: 2026-11-14; M4 validation: 2026-11-18; readiness recheck: 2026-11-20.
+These are development aids, not product features or substitutes for tests.
 Read [PLAN.md](PLAN.md), the [M4 requirements](phases/M4.md), implemented [M3 contract](phases/M3.md)
 and accepted [ADRs](adr/) first. M4 ADR 0006 is accepted.
 
@@ -17,6 +18,7 @@ codegraph sync
 On 2026-11-17, `codegraph status` reported the existing index up to date against merged M3 source.
 No new index or generated source was created for M4 preparation. The same existing index was refreshed
 for M4 implementation; the final `codegraph sync` reported already up to date.
+The 2026-11-20 restart-test/CI recheck reported **71 files, 1,148 nodes and 2,697 edges**, up to date.
 
 For indexed code, use the CodeGraph MCP exploration tool with this repository's absolute
 `projectPath` and the symbol/flow you need. Read its returned source and callers before edits;

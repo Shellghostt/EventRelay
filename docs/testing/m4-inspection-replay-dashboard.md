@@ -1,10 +1,10 @@
 # M4 inspection, replay and dashboard validation
 
-Measurements: 2026-11-17; final packaging/documentation checks: 2026-11-18.
+Measurements: 2026-11-17; packaging/documentation: 2026-11-18; readiness recheck: 2026-11-20.
 Branch: `feat/m4-implementation`.
 Implementation commit: `2d545c7`.
-Status: **implemented and verified locally; branch published; frontend CI blocked**. Six of seven CI
-jobs passed. The physical Redis container-restart scenario remains blocked/skipped. M4 is not merged or released.
+Status: **implemented and verified locally; final updated-branch CI pending**. The locked frontend
+audit and physical Redis container-restart test pass in the readiness recheck below. M4 remains unmerged.
 
 Baseline: merged M3 `853486150244a008146e5c00b5c2749179b53da2`, followed by the M4 requirements commit
 `e214999db8ec4932f8499fbb0b213c0d04a2cd86` and accepted ADR commit `7a06c80`.
@@ -87,8 +87,8 @@ license notices are emitted into the embedded assets with normalized line ending
 ## Acceptance mapping
 
 This table follows the checklist order in `docs/phases/M4.md`. Checked criteria have recorded evidence;
-the physical Redis restart and final branch CI criteria stay unchecked. Local dependency results above
-precede the current npm audit failure recorded below.
+the physical Redis restart criterion is now verified; final updated-branch CI remains unchecked.
+The original dependency results above and first CI failure are historical; the recheck is recorded below.
 
 | Criterion | Named evidence | Status |
 |---|---|---|
@@ -96,14 +96,14 @@ precede the current npm audit failure recorded below.
 | 2. Exhausted replay/new budget, monotonic attempts and final expiry | `TestM4ExhaustedReplayAndFinalExpiry` | Passed |
 | 3. Replay/state/completion/recovery guards and endpoint/410 races | `TestM4ConcurrentReplayAndStateGuards`, `TestM4ExhaustedReplayAndFinalExpiry`, `TestM4EndpointUpdateProtectsAgainstOld410`, existing delivery/M3 fence regressions | Passed |
 | 4. M3 upgrade, terminal-history preservation, counter/cutover guards | `TestM4MigrationPreservesM3AndFencesOldWorkers`, `TestM4CounterCapacityAndEndpointRevisionOverflow` | Passed |
-| 5. Redis interruption/restart after replay | `TestM4ReplayRedisInterruptionAndRestore` disconnects/reconnects the real Redis client and proves durable replay dispatch/history. Physical container restart did not run. | Partial; checkbox open |
+| 5. Redis interruption/restart after replay | `TestM4ReplayRedisInterruptionAndRestore` plus native-race `TestM4ReplayAcrossRedisContainerRestart`; real Docker stop/start, durable dispatch, one delivery and retained history | Passed locally |
 | 6. Duplicate-effect UX and replay without an HTTP attempt | `TestM4ReplayPreservesHistoryAndRejectsStaleRequests`; browser retained-history/duplicate-warning and dead-letter replay tests | Passed |
 | 7. Cursor traversal, concurrent inserts and live-membership contract | `TestM4InspectionBoundsPaginationAndFilters`; browser endpoint/event/attempt/cycle pagination; guide documents live membership | Passed |
 | 8. Exact 24-hour window, response denominator, replay/missing evidence and bounds | `TestM4StatisticsPersistedResponsesAndReplayHistory`, `TestStatisticsExactUTCBoundaries`, `TestM4StatisticsAttemptLimitUnavailable`; endpoint browser statistics/zero state | Passed |
 | 9. Frontend/auth/accessibility/text/pagination/poll lifecycle | Eight Vitest tests and seven Chromium tests listed below; Go session/origin tests | Passed |
 | 10. M1–M3 integration/race/lint/build/destination/vulnerability regressions | Canonical Go gates with real URLs; existing delivery/signature/SSRF/fence/M3 suites; govulncheck | Passed locally |
 | 11. Implemented dashboard screenshot | `web/e2e/dashboard.spec.ts` captures `docs/images/dashboard-m4.png` from synthetic local fixtures; visually inspected | Passed |
-| 12. Final M4 branch CI and evidence mapping | Push CI for `a176d83` passed six jobs; frontend dependency audit failed. See the branch CI record below. | Blocked; checkbox open |
+| 12. Final M4 branch CI and evidence mapping | Initial push CI passed six jobs; the withdrawn audit is resolved locally. Updated CI includes the physical restart case. | Final CI pending |
 
 New integration tests are in [m4_test.go](../../tests/integration/m4_test.go) and
 [m4_upgrade_stats_test.go](../../tests/integration/m4_upgrade_stats_test.go). The exact UTC-boundary test
@@ -191,18 +191,72 @@ six successful jobs and one failure:
 | Vulnerability scan | `govulncheck` passed |
 | Dashboard source, browser and dependency checks | Type/lint/eight unit tests/build/license checks passed; npm audit failed. Asset drift and Chromium checks were skipped after that failure. |
 
-The failing command is `npm audit --audit-level=moderate`. It reports five high-severity entries rooted
+The initial failing command was `npm audit --audit-level=moderate`. It reported five high-severity entries rooted
 in Picomatch 4.0.7, used by development tools Vite/Vitest through Picomatch, Tinyglobby and Fdir.
 [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf) covers single-branch repeated
 extglob ReDoS; its metadata was updated at `2026-11-17T15:56:44Z`. A local `npm --prefix web audit --json`
-recheck reproduced the failure. On this publication check, the npm registry still lists 4.0.7 as the
-latest Picomatch release and the advisory has no first patched version. The
-[proposed upstream fix](https://github.com/micromatch/picomatch/pull/254) remains unmerged.
-The accepted tooling pins and security threshold are retained. The final branch CI checkbox remains open.
+recheck reproduced the failure. At that publication check, the npm registry listed 4.0.7 as the
+latest Picomatch release and the advisory had no first patched version. The
+[proposed upstream fix](https://github.com/micromatch/picomatch/pull/254) remained unmerged.
+The advisory was subsequently withdrawn; see the readiness recheck below.
 
 This record identifies the implementation/publication run above. Documentation-only follow-ups run the
 same workflow; [current branch runs](https://github.com/Shellghostt/EventRelay/actions?query=branch%3Afeat%2Fm4-implementation)
-show their separate results. No M4 PR, merge or release was performed.
+show their separate results. No M4 PR, merge or release was performed during the initial publication.
+
+## 2026-11-20 readiness recheck
+
+GitHub's advisory API reports GHSA-fc5q-39xc-vjpf as **Withdrawn Advisory**, with
+`withdrawn_at=2026-11-18T15:38:56Z` and `updated_at=2026-11-19T16:07:41Z`.
+The official npm registry still publishes Picomatch 4.0.7; a locked reinstall and
+`npm audit --audit-level=moderate` now report **zero vulnerabilities**. Dependency pins, the lockfile,
+embedded assets and the audit threshold have no changes. This resolves the obsolete advisory failure
+through the corrected upstream advisory data.
+
+`TestM4ReplayAcrossRedisContainerRestart` requires an explicit full container ID, checks Redis 7.2,
+running state and the published loopback port against the fixture URL, and uses bounded Docker commands.
+It runs separately from the ordinary suite. CI supplies its own Redis service ID through
+`EVENTRELAY_TEST_REDIS_CONTAINER`; unset means a reported skip, while an invalid requested target fails.
+
+The test exhausts a one-attempt event, accepts its replay, publishes a notification, physically stops
+Redis and verifies the API's pending replay survives with no new HTTP attempt or destination call.
+After a physical start, it removes only the fixture's stream notification/group to require PostgreSQL
+republication even with Redis AOF. Recovery delivers once with unchanged ID, endpoint, type, payload
+and receive time; lifetime attempts are 1 then 2, and the old exhausted attempt/cycle/reason remain intact.
+Cleanup restores the verified container on failure and drops only the harness's schema/stream.
+
+Native Windows `-race` passed the physical test in **2.93 s** (package **4.052 s**). Docker's start times
+changed from `2026-11-20T15:09:12.599482264Z` to `2026-11-20T15:12:24.595973553Z`; the stopped state and
+failed Redis ping/sweep were observed between them. Final counters were replay 1, lifetime attempts 2,
+one retained prior cycle and one real destination call.
+
+The fresh project was `m4-eventrelay-restart-20261120`, with PostgreSQL/Redis ports **55446/56386** and
+new project volumes. Its containers/network were removed with Compose `down`, retaining those volumes.
+Audit JSON, raw logs and the rechecked synthetic screenshot stay in ignored `bin/`.
+Local `make test` passed all packages (integration **43.411 s**), `make lint`
+reported **0 issues**, locked `make frontend-check` passed eight unit tests and all type/build/license/
+audit gates, and all seven Chromium cases passed in **23.4 s**. Rebuilding preserved committed assets.
+Native `make race` passed all packages (integration **47.183 s**); `make build` produced both binaries
+with CGO disabled, and `govulncheck ./...` reported **No vulnerabilities found**. Actionlint 1.7.12
+accepted the updated workflow. Final updated-branch GitHub results remain pending publication.
+
+Reproduce the separate physical test against disposable services:
+
+```powershell
+$env:EVENTRELAY_PG_PORT='55446'
+$env:EVENTRELAY_REDIS_PORT='56386'
+docker compose -p m4-eventrelay-restart-20261120 -f deploy/docker-compose.yml up -d postgres redis
+$env:GOTOOLCHAIN='go1.26.11'
+$raceCompilerDir=Join-Path $env:LOCALAPPDATA 'Programs/MSYS2-Go-x64/msys64/ucrt64/bin'
+$env:CGO_ENABLED='1'
+$env:CC=Join-Path $raceCompilerDir 'gcc.exe'
+$env:CXX=Join-Path $raceCompilerDir 'g++.exe'
+$env:PATH="$raceCompilerDir;$env:PATH"
+$env:EVENTRELAY_TEST_DATABASE_URL='postgres://eventrelay:eventrelay@127.0.0.1:55446/eventrelay?sslmode=disable'
+$env:EVENTRELAY_TEST_REDIS_URL='redis://127.0.0.1:56386/0'
+$env:EVENTRELAY_TEST_REDIS_CONTAINER=docker compose -p m4-eventrelay-restart-20261120 -f deploy/docker-compose.yml ps -q redis
+go test -race -count=1 -timeout 90s -run '^TestM4ReplayAcrossRedisContainerRestart$' -v ./tests/integration
+```
 
 ## Cleanup and remaining validation limits
 
@@ -215,13 +269,14 @@ fixture schemas and zero browser Redis keys**.
 
 Automatic approval review rejected the combined Docker Redis stop/start plus HTTP replay experiment
 with **"blocked by policy"**, giving no further reason. None of that command ran; that experiment did not stop Redis.
-The real Redis client disconnect/reconnect integration test passed. The physical container-restart
-acceptance scenario remains skipped/open and was not attempted through a workaround.
+The real Redis client disconnect/reconnect integration test passed at that time. The physical container
+scenario remained skipped during the original run. On 2026-11-20 the user explicitly requested this
+validation; the new isolated, target-checked physical restart test above executed and passed.
 
 The four-process Compose 10k load test was not rerun for M4; the committed M2 result remains M2 evidence.
-Remote Linux/macOS/Windows Go checks and real integration CI passed as recorded above. Remote frontend
-asset/browser checks did not run after the dependency audit failure; their passing local evidence remains
-separate from CI.
+Initial remote Linux/macOS/Windows Go checks and integration CI passed as recorded above. Frontend
+asset/browser checks did not run in that initial failed workflow. The updated branch reruns the full
+frontend job and separate physical restart case; final results remain pending until execution completes.
 
 On resuming work on 2026-11-18, Docker Desktop and the existing M4 test containers were already stopped.
 Docker Desktop was started for the final image build; the M4 PostgreSQL/Redis containers remain stopped,
