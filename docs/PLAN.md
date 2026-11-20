@@ -38,8 +38,8 @@ M4 is **implemented and verified locally** on `feat/m4-implementation` under acc
 [usage/upgrade guide](guides/inspection-and-replay.md) and
 [validation record](testing/m4-inspection-replay-dashboard.md) document inspection, endpoint recovery,
 bounded replay cycles and the dashboard. The branch is published. The 2026-11-20 frontend audit and
-physical Redis restart recovery pass locally; the updated branch's final GitHub CI remains pending.
-M4 remains unmerged.
+physical Redis restart recovery pass locally and in GitHub CI. All seven jobs passed;
+[M4 PR #4](https://github.com/Shellghostt/EventRelay/pull/4) is open for review.
 
 Read this block first. It is the fastest way to know what is true about this repository right now.
 
@@ -48,10 +48,10 @@ project: EventRelay
 status: mvp                      # skeleton | mvp | v1 | maintenance
 version: 0.1.0
 builds: true
-functional: partial              # M1-M4 work; M4 acceptance and M5-M6 remain
+functional: partial              # M1-M4 verified; M5-M6 remain
 m4_branch: feat/m4-implementation
-m4_validation: local_including_physical_redis_restart
-m4_ci: pending_updated_branch
+m4_validation: local_and_full_ci_including_physical_redis_restart
+m4_ci: passed_all_seven_jobs
 
 implemented:
   - Redis Streams dispatch with durable PostgreSQL republication
@@ -719,7 +719,7 @@ overrides require documented configuration and an ADR before implementation.
 **Deliverable:** event list/detail/attempt endpoints, replay, and a React dashboard showing endpoint
 delivery evidence, recent events, attempt timelines and a replay button, with guarded endpoint recovery.
 
-Status: **Implemented, verified locally and pushed; final updated-branch CI pending.** Follow the
+Status: **Implemented and verified locally/in CI; PR #4 open for review.** Follow the
 [M4 requirements](phases/M4.md), accepted [ADR 0006](adr/0006-m4-replay-and-inspection.md),
 [usage/upgrade guide](guides/inspection-and-replay.md) and
 [validation record](testing/m4-inspection-replay-dashboard.md). The locked frontend audit passes after
@@ -737,7 +737,7 @@ integration CI now runs the container restart case separately against its own se
 - [x] Auth, frontend checks, safe rendering, pagination and polling cleanup pass, plus local M1–M3 regressions
 - [x] Dashboard has one screenshot in the README, taken from a real local run
 - [x] Physical Redis container restart after accepted replay is verified (native race; see validation record)
-- [ ] Final updated M4 branch CI passes (pending; see validation record)
+- [x] Final M4 branch CI passes (all seven jobs; see validation record)
 
 ### M5 — Tenancy, keys, limits, idempotency
 
@@ -954,8 +954,8 @@ The worker uses fenced PostgreSQL leases, records attempts and recovers expired 
 the documented backoff, jitter, Retry-After and stable terminal reasons in merged main;
 [audit corrections and verification](testing/m3-audit-fixes.md) are recorded locally. M4 inspection,
 endpoint recovery, replay and UI are implemented with [recorded evidence](testing/m4-inspection-replay-dashboard.md).
-The M4 branch is pushed; the locked frontend audit and physical Redis restart test pass locally,
-with final updated-branch CI pending.
+The M4 branch is pushed; the locked frontend audit and physical Redis restart test pass locally
+and in GitHub CI. All seven jobs pass and PR #4 is open for review.
 Tenancy, API keys and production posture remain future milestones.
 
 **Rules:** update implemented/not_implemented, README and CHANGELOG together. Never claim

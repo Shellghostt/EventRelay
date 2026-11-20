@@ -18,7 +18,7 @@ codegraph sync
 On 2026-11-17, `codegraph status` reported the existing index up to date against merged M3 source.
 No new index or generated source was created for M4 preparation. The same existing index was refreshed
 for M4 implementation; the final `codegraph sync` reported already up to date.
-The 2026-11-20 restart-test/CI recheck reported **71 files, 1,148 nodes and 2,697 edges**, up to date.
+The final 2026-11-20 restart-test/CI recheck reported **71 files, 1,152 nodes and 2,706 edges**, up to date.
 
 For indexed code, use the CodeGraph MCP exploration tool with this repository's absolute
 `projectPath` and the symbol/flow you need. Read its returned source and callers before edits;

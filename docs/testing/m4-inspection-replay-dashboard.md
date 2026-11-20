@@ -3,8 +3,9 @@
 Measurements: 2026-11-17; packaging/documentation: 2026-11-18; readiness recheck: 2026-11-20.
 Branch: `feat/m4-implementation`.
 Implementation commit: `2d545c7`.
-Status: **implemented and verified locally; final updated-branch CI pending**. The locked frontend
-audit and physical Redis container-restart test pass in the readiness recheck below. M4 remains unmerged.
+Status: **implemented and verified locally/in GitHub CI; all seven jobs passed**. The locked frontend
+audit and physical Redis container-restart test pass in the readiness recheck below.
+[PR #4](https://github.com/Shellghostt/EventRelay/pull/4) is open for review; M4 remains unmerged.
 
 Baseline: merged M3 `853486150244a008146e5c00b5c2749179b53da2`, followed by the M4 requirements commit
 `e214999db8ec4932f8499fbb0b213c0d04a2cd86` and accepted ADR commit `7a06c80`.
@@ -87,7 +88,7 @@ license notices are emitted into the embedded assets with normalized line ending
 ## Acceptance mapping
 
 This table follows the checklist order in `docs/phases/M4.md`. Checked criteria have recorded evidence;
-the physical Redis restart criterion is now verified; final updated-branch CI remains unchecked.
+the physical Redis restart and final CI criteria are verified, including all seven GitHub jobs.
 The original dependency results above and first CI failure are historical; the recheck is recorded below.
 
 | Criterion | Named evidence | Status |
@@ -96,14 +97,14 @@ The original dependency results above and first CI failure are historical; the r
 | 2. Exhausted replay/new budget, monotonic attempts and final expiry | `TestM4ExhaustedReplayAndFinalExpiry` | Passed |
 | 3. Replay/state/completion/recovery guards and endpoint/410 races | `TestM4ConcurrentReplayAndStateGuards`, `TestM4ExhaustedReplayAndFinalExpiry`, `TestM4EndpointUpdateProtectsAgainstOld410`, existing delivery/M3 fence regressions | Passed |
 | 4. M3 upgrade, terminal-history preservation, counter/cutover guards | `TestM4MigrationPreservesM3AndFencesOldWorkers`, `TestM4CounterCapacityAndEndpointRevisionOverflow` | Passed |
-| 5. Redis interruption/restart after replay | `TestM4ReplayRedisInterruptionAndRestore` plus native-race `TestM4ReplayAcrossRedisContainerRestart`; real Docker stop/start, durable dispatch, one delivery and retained history | Passed locally |
+| 5. Redis interruption/restart after replay | `TestM4ReplayRedisInterruptionAndRestore` plus native-race/CI `TestM4ReplayAcrossRedisContainerRestart`; real Docker stop/start, durable dispatch, one delivery and retained history | Passed locally and in CI |
 | 6. Duplicate-effect UX and replay without an HTTP attempt | `TestM4ReplayPreservesHistoryAndRejectsStaleRequests`; browser retained-history/duplicate-warning and dead-letter replay tests | Passed |
 | 7. Cursor traversal, concurrent inserts and live-membership contract | `TestM4InspectionBoundsPaginationAndFilters`; browser endpoint/event/attempt/cycle pagination; guide documents live membership | Passed |
 | 8. Exact 24-hour window, response denominator, replay/missing evidence and bounds | `TestM4StatisticsPersistedResponsesAndReplayHistory`, `TestStatisticsExactUTCBoundaries`, `TestM4StatisticsAttemptLimitUnavailable`; endpoint browser statistics/zero state | Passed |
 | 9. Frontend/auth/accessibility/text/pagination/poll lifecycle | Eight Vitest tests and seven Chromium tests listed below; Go session/origin tests | Passed |
 | 10. M1–M3 integration/race/lint/build/destination/vulnerability regressions | Canonical Go gates with real URLs; existing delivery/signature/SSRF/fence/M3 suites; govulncheck | Passed locally |
 | 11. Implemented dashboard screenshot | `web/e2e/dashboard.spec.ts` captures `docs/images/dashboard-m4.png` from synthetic local fixtures; visually inspected | Passed |
-| 12. Final M4 branch CI and evidence mapping | Initial push CI passed six jobs; the withdrawn audit is resolved locally. Updated CI includes the physical restart case. | Final CI pending |
+| 12. Final M4 branch CI and evidence mapping | Verified push and PR workflows passed all seven jobs, including the full frontend job and physical Redis restart; run evidence below | Passed |
 
 New integration tests are in [m4_test.go](../../tests/integration/m4_test.go) and
 [m4_upgrade_stats_test.go](../../tests/integration/m4_upgrade_stats_test.go). The exact UTC-boundary test
@@ -238,7 +239,7 @@ reported **0 issues**, locked `make frontend-check` passed eight unit tests and 
 audit gates, and all seven Chromium cases passed in **23.4 s**. Rebuilding preserved committed assets.
 Native `make race` passed all packages (integration **47.183 s**); `make build` produced both binaries
 with CGO disabled, and `govulncheck ./...` reported **No vulnerabilities found**. Actionlint 1.7.12
-accepted the updated workflow. Final updated-branch GitHub results remain pending publication.
+accepted the updated workflow. Verified GitHub results are recorded below.
 
 The first recheck CI on `1555e2f` passed the full dashboard source/audit/assets/browser job and all
 three native Go jobs, lint and vulnerability scanning. Its new physical restart case exposed a fixture
@@ -252,8 +253,27 @@ It retains the original client when the mapping is stable and creates a new fixt
 port changes. Native race rechecks passed both paths: fixed port **56386 → 56386**, **2.88 s**
 (package **4.007 s**), and random port **51224 → 10903**, **2.69 s** (package **3.809 s**).
 Both retained the same event/payload, original attempt/cycle/reason, one accepted replay and exactly
-one destination delivery. The corrected source passed `make lint` with **0 issues**. Final CI reruns
-the corrected test; its result remains pending until the new branch head completes.
+one destination delivery. The corrected source passed `make lint` with **0 issues** and both GitHub
+workflows passed the corrected test as recorded below.
+
+### Verified GitHub CI
+
+Head `178f0ee049009fe42c26c36aa8bd0ff440889360` passed all seven jobs in both workflows:
+
+| Workflow | Run | Result |
+|---|---|---|
+| Pull request | [44766346517](https://github.com/Shellghostt/EventRelay/actions/runs/44766346517) | **7/7 jobs passed** |
+| Feature push | [44766336017](https://github.com/Shellghostt/EventRelay/actions/runs/44766336017) | **7/7 jobs passed** |
+
+Native Ubuntu/Windows/macOS Go race/test/build, real PostgreSQL/Redis integration, lint and
+vulnerability scanning all passed. The frontend job passed the moderate npm audit with **zero
+vulnerabilities**, eight unit tests, the 155-package declared-license review, reproducible embedded
+assets and all seven Chromium tests (**33.2 s** in PR CI).
+
+The separate Linux CI physical-restart test passed in **1.87 s** (package **2.886 s**), rediscovering
+the changed host port **32769 → 32770**. Its log confirms one accepted replay, lifetime attempts 1 then
+2, one retained prior cycle and one real destination call. PR #4 exposes the current branch-head checks
+for subsequent documentation commits. These CI runs are distinct from the local/older load measurements.
 
 Reproduce the separate physical test against disposable services:
 
@@ -290,8 +310,8 @@ validation; the new isolated, target-checked physical restart test above execute
 
 The four-process Compose 10k load test was not rerun for M4; the committed M2 result remains M2 evidence.
 Initial remote Linux/macOS/Windows Go checks and integration CI passed as recorded above. Frontend
-asset/browser checks did not run in that initial failed workflow. The updated branch reruns the full
-frontend job and separate physical restart case; final results remain pending until execution completes.
+asset/browser checks did not run in that initial failed workflow. The corrected branch passed the full
+frontend job and separate physical restart case in both workflows as recorded above.
 
 On resuming work on 2026-11-18, Docker Desktop and the existing M4 test containers were already stopped.
 Docker Desktop was started for the final image build; the M4 PostgreSQL/Redis containers remain stopped,

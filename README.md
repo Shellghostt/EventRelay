@@ -2,7 +2,7 @@
 
 > Self-hosted webhook infrastructure with reliable delivery, event replay, retries and observability.
 
-![status](https://img.shields.io/badge/status-M4_CI_pending-blue)
+![status](https://img.shields.io/badge/status-M4_verified-green)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 ![Go](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)
 
@@ -13,7 +13,8 @@ stable terminal reason ([ADR 0005](docs/adr/0005-m3-retry-policy.md)).
 M4 inspection, endpoint recovery, guarded replay and the React dashboard are implemented and verified
 locally on the published `feat/m4-implementation` branch. The frontend audit now passes after the
 Picomatch advisory was withdrawn, and physical Redis restart recovery passes under the Windows race
-detector. The updated branch's GitHub CI is pending. See the
+detector. All seven GitHub CI jobs passed, including the full dashboard and physical restart checks.
+[M4 PR #4](https://github.com/Shellghostt/EventRelay/pull/4) is open for review. See the
 [validation record](docs/testing/m4-inspection-replay-dashboard.md#2026-11-20-readiness-recheck).
 
 ## Why this exists
@@ -193,15 +194,16 @@ M4 follows the updated [phase requirements](docs/phases/M4.md) and accepted
 real PostgreSQL/Redis integration, browser checks and a bounded load regression. The
 [initial branch CI](https://github.com/Shellghostt/EventRelay/actions/runs/44153798480) passed six
 Go/backend jobs and failed an advisory that has since been withdrawn. The current locked frontend
-checks and physical Redis container-restart test pass locally. Final GitHub CI remains pending;
-M4 is published on its feature branch and remains unmerged.
+checks and physical Redis container-restart test pass locally and in
+[M4 CI](https://github.com/Shellghostt/EventRelay/actions/runs/44766346517).
+M4 is published in [PR #4](https://github.com/Shellghostt/EventRelay/pull/4) for review.
 
 | Milestone | Deliverable | Status |
 |---|---|---|
 | M1 | HTTP ingestion API and durable event storage | **Done** (v0.1.0) |
 | M2 | Redis Streams transport, worker pool, horizontal scaling | **Done (merged)** |
 | M3 | Retry scheduler and dead-letter queue | **Done (merged)** |
-| M4 | Dashboard, request inspection and manual replay | **Implemented; local gates pass; final CI pending** |
+| M4 | Dashboard, request inspection and manual replay | **Verified; local and all seven CI jobs pass; PR #4 open** |
 | M5 | Multi-tenancy, API keys, rate limits, idempotency | Not started |
 | M6 | Ordering options, tracing, backpressure, load test report, docs | Not started |
 

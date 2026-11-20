@@ -17,8 +17,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Pinned frontend source, lockfile, embedded assets/license attribution, canonical Make targets and an
   Ubuntu browser/dependency CI job. [M4 local validation](docs/testing/m4-inspection-replay-dashboard.md)
   records Go/native Windows race, PostgreSQL/Redis, eight frontend unit tests, seven Chromium tests,
-  load/heap/query measurements and a real dashboard screenshot. The M4 branch is published; final
-  updated-branch CI is pending. The initial Picomatch audit advisory was withdrawn, and the locked
+  load/heap/query measurements and a real dashboard screenshot. The M4 branch is published in
+  [PR #4](https://github.com/Shellghostt/EventRelay/pull/4); all seven CI jobs passed.
+  The initial Picomatch audit advisory was withdrawn, and the locked
   frontend audit now passes.
 - A separate opt-in race test restarts a verified disposable Redis container after accepting an exhausted
   event's replay. It proves durable recovery, one real delivery and preserved event/attempt/terminal

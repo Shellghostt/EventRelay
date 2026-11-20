@@ -1,7 +1,7 @@
 # EventRelay dashboard
 
-The M4 console is implemented and verified locally on the published feature branch. The locked
-dependency audit passes after the Picomatch advisory was withdrawn; final updated-branch CI is pending.
+The M4 console is implemented and verified locally and in GitHub CI on the published feature branch.
+The locked dependency audit passes after the Picomatch advisory was withdrawn; all seven CI jobs pass.
 It uses React, TypeScript, Vite and repository-owned CSS. The Go API embeds committed assets from
 `internal/dashboard/dist` and serves them at `/dashboard/`.
 
